@@ -29,8 +29,9 @@ jobs:
         run: npm run typecheck
       - name: Lint
         run: npm run lint
-      - name: Repository tests
-        run: npm run test:repo
+      # npm run test:repo is NOT run here. Some of its tests shell out to
+      # gitleaks, which only the secrets-and-source-protection workflow
+      # installs, and that workflow already runs the whole repo suite.
       - name: Unit tests with coverage
         run: npm run test:coverage
       - name: Build

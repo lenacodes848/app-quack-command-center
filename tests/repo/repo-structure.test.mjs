@@ -480,9 +480,16 @@ function pathEntries(wf) {
 test('CI runs every required step on the full validation, never caching secrets or mutable database state', () => {
   const wf = read('.github/workflows/validate.yml');
   assert.doesNotMatch(wf, /\.env|data\/|\.db\b/, 'never cache secrets or mutable database state');
-  for (const step of ['format:check', 'lint', 'typecheck', 'test:repo', 'test:coverage', 'build']) {
+  for (const step of ['format:check', 'lint', 'typecheck', 'test:coverage', 'build']) {
     assert.match(wf, new RegExp(`npm run ${step}\\b`), `CI must run ${step}`);
   }
+  // test:repo belongs to the secrets workflow, which is the one that installs
+  // gitleaks. Running it here too would fail on a missing binary.
+  assert.match(
+    read('.github/workflows/secrets.yml'),
+    /npm run test:repo\b/,
+    'the repo suite must still run somewhere in CI',
+  );
   assert.match(wf, /npm run test:integration\b/, 'CI must run the integration project');
   assert.match(wf, /npm run test:e2e\b/, 'CI must run the browser smoke test');
   assert.match(wf, /npm ci\b/, 'CI installs from the lockfile, never npm install');

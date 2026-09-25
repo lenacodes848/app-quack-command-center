@@ -310,6 +310,25 @@ test('validate joins every step with &&, so an early failure stops the run', () 
   }
 });
 
+test('validate has no content before the first step or after the last step', () => {
+  const validate = JSON.parse(read('package.json')).scripts.validate;
+  const steps = validateSteps(validate);
+  const trimmed = validate.trim();
+  const first = steps[0][0];
+  const last = steps[steps.length - 1][0];
+  assert.ok(
+    trimmed.startsWith(first),
+    `validate must begin with its first step ("${first}"), with nothing before it: a leading command ` +
+      'would run outside the && chain, so its failure could never stop the chain',
+  );
+  assert.ok(
+    trimmed.endsWith(last),
+    `validate must end with its last step ("${last}"), with nothing after it: a trailing command ` +
+      'would run outside the && chain, so it would run even after every real step, and the run could ' +
+      'still exit 0 no matter what it does',
+  );
+});
+
 test('validate runs build immediately before test:e2e, joined by exactly &&, with nothing else between them', () => {
   const validate = JSON.parse(read('package.json')).scripts.validate;
   const steps = validateSteps(validate);

@@ -122,3 +122,18 @@ After the fix, the issue's literal reproduction (`rm -rf` of every `dist`, then 
 Slip recorded as data: the fix commit was made while lint was failing, because my check and my commit were not chained. Typed lint rules were being applied to the plain JavaScript probe fixture, which is not in the ESLint tsconfig. A follow-up commit ignores that fixture directory. Lint, type-check, format, all tests, both repository scans and audit pass.
 
 Second slip recorded as data: the docs script for this pull request wrote a literal backslash and n at the end of this file instead of a newline (an escaped sequence inside a quoted heredoc). It was caught by inspecting the bytes after the push, repaired, and a new repository test now fails if any memory file contains a literal backslash-n. That test was mutation-checked against the same damage.
+
+## 2026-09-25 (wrap-up after the bug-fix pull requests)
+
+Pull requests 17, 18 and 20 were reviewed and merged, and issues 3, 4, 5, 10 and 11 are closed. Nothing labelled `bug` is open.
+
+Post-merge evidence for issue 3, the check promised in the pull request: the push-to-`main` runs after the merges (workflow runs 36092471615 and 36092657738) each verified the gitleaks checksum, scanned the working tree (about 330 KB) and scanned 26 commits of history, all with no leaks. The earlier failure mode, "0 commits scanned" reported as green, is gone.
+
+Health of `main` after the three merges, all run locally: no conflict markers, type-check, lint, format check, 28 Vitest tests, 47 repository tests, source protection scan, gitleaks tree and history (26 commits), `npm audit` with 0 vulnerabilities.
+
+Cleanup done: all seven merged feature branches deleted locally and on the remote (this included the abandoned handoff branch, whose commits were already in `main` through the stacked pull request), stale remote-tracking references cleared, the 369 MB of scratch spike projects removed, and a duplicate copy of the phase plan that I had left in the original starter-kit folder removed after confirming it was identical to the repository copy. The original kit files were not touched. Only `main` exists now. gitleaks and Node 24 stay installed because the project needs them.
+
+Fixed in this wrap-up (issue 16): `research.md` said stacked pull requests retarget automatically. They do not. The correct procedure is now in Environment notes and the mistake is recorded under Failed approaches. New tests pin both, and a resume section in `plan.md` is pinned too.
+
+Where to resume: `plan.md`, section "Next steps (resume here)". In short: ask the owner about branch protection, then write and execute the TASK_003 plan, then TASK_004 and TASK_005. The workflow pitfalls I hit (unchained commands, mutating before committing, literal escapes in scripted edits, hanging git network commands on this machine) are in `research.md` under Shell and workflow pitfalls.
+

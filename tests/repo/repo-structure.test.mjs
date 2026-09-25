@@ -231,3 +231,20 @@ test('coverage thresholds are set and cannot silently drop', () => {
     assert.ok(value >= 80, `${metric} coverage threshold must be at least 80, found ${value}`);
   }
 });
+
+test('the browser smoke test retains screenshots and traces on failure', () => {
+  assert.ok(existsSync(join(root, 'playwright.config.ts')), 'playwright.config.ts must exist');
+  const config = read('playwright.config.ts');
+  assert.match(config, /screenshot:\s*'only-on-failure'/, 'failures must keep a screenshot');
+  assert.match(config, /trace:\s*'retain-on-failure'/, 'failures must keep a trace');
+  assert.match(config, /video:\s*'retain-on-failure'/, 'failures must keep a video');
+
+  const scripts = JSON.parse(read('package.json')).scripts;
+  assert.equal(scripts['test:e2e'], 'playwright test');
+  assert.ok(existsSync(join(root, 'tests/e2e/smoke.spec.ts')), 'a smoke spec must exist');
+
+  const ignore = read('.gitignore').split('\n');
+  for (const entry of ['playwright-report', 'test-results']) {
+    assert.ok(ignore.includes(entry), `${entry} must be gitignored, never committed`);
+  }
+});

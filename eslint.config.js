@@ -11,6 +11,7 @@ export default tseslint.config(
       'eslint.config.js',
       'vitest.config.ts',
       'apps/web/vite.config.ts',
+      'playwright.config.ts',
       'tests/integration/fixtures/**',
     ],
   },

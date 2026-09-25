@@ -24,12 +24,14 @@
     "test:integration": "vitest run --project integration",
     "test:coverage": "vitest run --project unit --coverage",
     "test:repo": "node --test \"tests/repo/*.test.mjs\"",
+    "test:e2e": "playwright test",
     "scan:source": "node scripts/source-protection-scan.mjs",
     "scan:secrets": "gitleaks dir . --no-banner --redact",
     "scan:secrets:history": "node scripts/scan-history.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
     "@types/node": "24.13.6",
     "@vitest/coverage-v8": "4.1.11",
     "eslint": "10.11.0",

@@ -407,10 +407,72 @@ test('validate runs build immediately before test:e2e, joined by exactly &&, wit
   );
 });
 
-test('CI runs the full validation on a supported Node LTS, caching dependencies only', () => {
+// Splits validate.yml into a map of job name -> job body, so guards below can assert
+// against a single job's own text instead of the whole file. A file-wide assert.match
+// is satisfied by a single occurrence anywhere, so a regression confined to one job can
+// hide behind a sibling job that still does the right thing; parsing jobs closes that.
+function parseWorkflowJobs(wf) {
+  const jobsHeader = wf.match(/^jobs:$/m);
+  assert.ok(jobsHeader, 'workflow must declare a top-level jobs: section');
+  const body = wf.slice(jobsHeader.index + jobsHeader[0].length);
+  const headers = [...body.matchAll(/^ {2}([\w-]+):$/gm)];
+  const jobs = {};
+  headers.forEach((h, i) => {
+    const start = h.index + h[0].length;
+    const end = i + 1 < headers.length ? headers[i + 1].index : body.length;
+    jobs[h[1]] = body.slice(start, end);
+  });
+  return jobs;
+}
+
+// Returns every actions/upload-artifact step, tagged with the job it lives in, by
+// splitting each job's body on its step markers ("      - ").
+function uploadArtifactSteps(wf) {
+  const jobs = parseWorkflowJobs(wf);
+  const steps = [];
+  for (const [jobName, jobBody] of Object.entries(jobs)) {
+    for (const step of jobBody.split(/\n(?=      - )/)) {
+      if (/uses:\s*actions\/upload-artifact@/.test(step)) {
+        steps.push({ jobName, step });
+      }
+    }
+  }
+  return steps;
+}
+
+// Returns every value assigned to a `path:` key under an artifact upload, whether written
+// on the same line (`path: coverage`) or as a multi-line block scalar (`path: |` followed
+// by indented entries, the form the e2e job already uses for playwright-report/test-results).
+function pathEntries(wf) {
+  const entries = [];
+  const lines = wf.split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    const header = lines[i].match(/^(\s*)path:\s*(.*)$/);
+    if (!header) continue;
+    const [, indent, rest] = header;
+    const trimmedRest = rest.trim();
+    if (trimmedRest && trimmedRest !== '|' && trimmedRest !== '>') {
+      entries.push(trimmedRest);
+      continue;
+    }
+    let j = i + 1;
+    while (j < lines.length) {
+      const line = lines[j];
+      if (line.trim() === '') {
+        j += 1;
+        continue;
+      }
+      const lineIndent = line.match(/^(\s*)/)[1].length;
+      if (lineIndent <= indent.length) break;
+      entries.push(line.trim());
+      j += 1;
+    }
+  }
+  return entries;
+}
+
+test('CI runs every required step on the full validation, never caching secrets or mutable database state', () => {
   const wf = read('.github/workflows/validate.yml');
-  assert.match(wf, /node-version-file:\s*\.nvmrc/, 'Node version comes from .nvmrc, never inline');
-  assert.match(wf, /cache:\s*npm/, 'dependencies are cached');
   assert.doesNotMatch(wf, /\.env|data\/|\.db\b/, 'never cache secrets or mutable database state');
   for (const step of ['format:check', 'lint', 'typecheck', 'test:repo', 'test:coverage', 'build']) {
     assert.match(wf, new RegExp(`npm run ${step}\\b`), `CI must run ${step}`);
@@ -420,28 +482,77 @@ test('CI runs the full validation on a supported Node LTS, caching dependencies 
   assert.match(wf, /npm ci\b/, 'CI installs from the lockfile, never npm install');
 });
 
+test('every job sets up Node from .nvmrc and caches npm dependencies', () => {
+  const wf = read('.github/workflows/validate.yml');
+  const jobs = parseWorkflowJobs(wf);
+  for (const [name, jobBody] of Object.entries(jobs)) {
+    assert.match(
+      jobBody,
+      /node-version-file:\s*\.nvmrc/,
+      `job ${name} must read its Node version from .nvmrc, never inline`,
+    );
+    assert.match(
+      jobBody,
+      /cache:\s*npm/,
+      `job ${name} must cache npm dependencies; a cache dropped from one job must not hide behind a sibling job that still has it`,
+    );
+  }
+});
+
+test('every artifact upload step keeps running on failure', () => {
+  const wf = read('.github/workflows/validate.yml');
+  const steps = uploadArtifactSteps(wf);
+  assert.ok(steps.length >= 2, 'expected at least the coverage and browser-report uploads');
+  for (const { jobName, step } of steps) {
+    assert.match(
+      step,
+      /if:\s*\$\{\{\s*(?:!\s*cancelled\(\)|always\(\))\s*\}\}/,
+      `the upload-artifact step in job ${jobName} must keep running on failure (if: !cancelled() or always()); an artifact is most valuable on the run that failed`,
+    );
+  }
+});
+
+test('the coverage and browser-report uploads pin different if-no-files-found values on purpose', () => {
+  const wf = read('.github/workflows/validate.yml');
+  const steps = uploadArtifactSteps(wf);
+  const coverage = steps.find(({ step }) => /name:\s*coverage\b/.test(step));
+  const playwright = steps.find(({ step }) => /name:\s*playwright-report\b/.test(step));
+  assert.ok(coverage, 'a coverage upload-artifact step must exist');
+  assert.ok(playwright, 'a playwright-report upload-artifact step must exist');
+  assert.match(
+    coverage.step,
+    /if-no-files-found:\s*error/,
+    'the coverage upload must use if-no-files-found: error; a silently missing coverage report is exactly the false-green bug #3 already shipped',
+  );
+  assert.match(
+    playwright.step,
+    /if-no-files-found:\s*ignore/,
+    'the browser-report upload must use if-no-files-found: ignore; it is correctly empty when nothing failed',
+  );
+});
+
 test('CI retains coverage and browser failure artifacts', () => {
   const wf = read('.github/workflows/validate.yml');
   assert.match(wf, /actions\/upload-artifact@[0-9a-f]{40}/, 'artifacts are uploaded');
   assert.match(wf, /coverage/, 'coverage must be retained');
   assert.match(wf, /playwright-report/, 'the browser report must be retained');
   assert.match(wf, /test-results/, 'screenshots, traces and videos must be retained');
-  assert.match(
-    wf,
-    /if:\s*\$\{\{\s*(?:!\s*cancelled\(\)|always\(\))\s*\}\}/,
-    'artifacts must upload even on failure',
-  );
 });
 
 test('the required check names the ruleset depends on do not drift', () => {
   const wf = read('.github/workflows/validate.yml');
-  assert.match(wf, /^ {2}validate:$/m, 'the job must be named validate');
-  assert.match(wf, /^ {2}e2e:$/m, 'the job must be named e2e');
+  const jobs = parseWorkflowJobs(wf);
+  assert.deepEqual(
+    Object.keys(jobs).sort(),
+    ['e2e', 'validate'],
+    'the workflow must define exactly the jobs validate and e2e, no more, no fewer, so a rename or an added job cannot go unnoticed',
+  );
 });
 
 test('a dist cache is never keyed without its build info', () => {
   const wf = read('.github/workflows/validate.yml');
-  if (/path:[^\n]*dist/.test(wf)) {
+  const distEntries = pathEntries(wf).filter((entry) => /\bdist\b/.test(entry));
+  if (distEntries.length > 0) {
     assert.match(wf, /tsbuildinfo/, 'caching dist without its .tsbuildinfo causes stale builds');
   }
 });

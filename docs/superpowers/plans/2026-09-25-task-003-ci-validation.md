@@ -803,7 +803,7 @@ One at a time, after the commit, each time restoring with `git checkout .github/
 
 1. Add `    permissions:\n      contents: write` under the `scan:` job. Run `npm run test:repo`. Expected: FAIL on the job-level permissions assertion.
 2. Change one pinned SHA back to `actions/checkout@v4`. Expected: FAIL on the SHA-pinning assertion.
-3. Add `          GH_TOKEN: <a fake token, assembled at mutation time>` to the workflow `env:`. Expected: FAIL on the credential-literal assertion.
+3. Add a `GH_TOKEN:` entry to the workflow `env:` whose value is the four characters `ghp_` followed by `0123456789abcdefghij`. Build the string yourself rather than copying a literal from here — a literal fake token written into this document is flagged by gitleaks' `generic-api-key` rule, and `npm run scan:secrets` scans every file in the tree including this plan. Same reason the email fixtures in Task 4 are assembled from parts. Expected: FAIL on the credential-literal assertion. Restore immediately afterwards, and re-run `npm run scan:secrets` to confirm the tree is clean again before moving on.
 
 ---
 

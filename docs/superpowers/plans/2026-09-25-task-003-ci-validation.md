@@ -556,11 +556,23 @@ Add after the existing `RULES` definition:
 const ALLOWED_IDENTITY_EMAIL =
   /^(?:[A-Za-z0-9._%+-]+@users\.noreply\.github\.com|noreply@github\.com)$/;
 
+// An email-shaped substring anywhere in a commit-metadata field. Unlike the
+// file-content EMAIL rule, this has no example.* exemption and no SSH-remote
+// "git" exception: neither applies to who authored a commit, and a personal
+// address can land in a NAME field (an ordinary `git config user.name` mistake),
+// not only in an email field.
+const EMAIL_TOKEN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+
 export function scanIdentities(identities, denylist) {
   const findings = [];
   const deny = denylist.map((d) => d.toLowerCase());
-  for (const { commit, field, value } of identities) {
-    if (field.endsWith('-email') && !ALLOWED_IDENTITY_EMAIL.test(value)) {
+  for (const { commit, field, value, malformed } of identities) {
+    if (malformed) {
+      findings.push({ file: `commit ${commit}`, line: field, rule: 'malformed-identity' });
+      continue;
+    }
+    const emails = value.match(EMAIL_TOKEN) ?? [];
+    if (emails.some((addr) => !ALLOWED_IDENTITY_EMAIL.test(addr))) {
       findings.push({ file: `commit ${commit}`, line: field, rule: 'identity-email' });
     }
     const lower = value.toLowerCase();
@@ -574,22 +586,38 @@ export function scanIdentities(identities, denylist) {
 }
 
 export function readIdentities(rootDir) {
-  const out = execFileSync('git', ['log', '--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce', '--all'], {
-    cwd: rootDir,
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  let out;
+  try {
+    out = execFileSync('git', ['log', '-z', '--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce', '--all'], {
+      cwd: rootDir,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+      // Explicit pipes, not inherited stdio: a git failure's stderr can carry raw
+      // identities, and inherited stdio prints it even when the exception is caught.
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch {
+    throw new Error('readIdentities: failed to read commit metadata from git log');
+  }
   const identities = [];
-  for (const line of out.split('\n').filter(Boolean)) {
-    const [commit, an, ae, cn, ce] = line.split('\x1f');
-    identities.push({ commit: commit.slice(0, 7), field: 'author-name', value: an });
-    identities.push({ commit: commit.slice(0, 7), field: 'author-email', value: ae });
-    identities.push({ commit: commit.slice(0, 7), field: 'committer-name', value: cn });
-    identities.push({ commit: commit.slice(0, 7), field: 'committer-email', value: ce });
+  for (const record of out.split('\0').filter(Boolean)) {
+    const fields = record.split('\x1f');
+    const commit = (fields[0] ?? '').slice(0, 7) || 'unknown';
+    if (fields.length !== 5) {
+      identities.push({ commit, field: 'record', value: '', malformed: true });
+      continue;
+    }
+    const [, an, ae, cn, ce] = fields;
+    identities.push({ commit, field: 'author-name', value: an });
+    identities.push({ commit, field: 'author-email', value: ae });
+    identities.push({ commit, field: 'committer-name', value: cn });
+    identities.push({ commit, field: 'committer-email', value: ce });
   }
   return identities;
 }
 ```
+
+The three things above that are easy to get wrong, and that a first implementation of this task got wrong: records are split on NUL (`-z`) rather than a newline, the field count is asserted and a malformed record becomes a finding rather than a skipped line, and the email check runs on **every** field rather than only the ones named `-email`.
 
 `%x1f` is the ASCII unit separator, a better field delimiter than a comma or a space because it does not occur in ordinary names and addresses.
 

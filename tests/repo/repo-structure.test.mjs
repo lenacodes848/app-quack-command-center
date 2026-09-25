@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -117,10 +117,59 @@ test('a secrets scanner runs in CI', () => {
   assert.match(wf, /gitleaks/i);
 });
 
-test('CI keeps the workflow token read-only', () => {
-  const wf = read('.github/workflows/secrets.yml');
-  assert.match(wf, /^permissions:\n {2}contents:\s*read$/m);
-  assert.doesNotMatch(wf, /:\s*write\b/, 'no write scopes anywhere: least privilege');
+const workflowFiles = () =>
+  readdirSync(join(root, '.github/workflows'))
+    .filter((f) => f.endsWith('.yml') || f.endsWith('.yaml'))
+    .map((f) => `.github/workflows/${f}`);
+
+test('every workflow file exists and is discovered, not hard-coded', () => {
+  const files = workflowFiles();
+  assert.ok(files.length >= 1, 'there must be at least one workflow');
+  assert.ok(
+    files.includes('.github/workflows/secrets.yml'),
+    'the secrets workflow must still be there',
+  );
+});
+
+test('every workflow keeps its token read-only, at the top level and in every job', () => {
+  for (const file of workflowFiles()) {
+    const wf = read(file);
+    assert.match(
+      wf,
+      /^permissions:\n {2}contents:\s*read$/m,
+      `${file} must declare a read-only top-level permissions block`,
+    );
+    assert.doesNotMatch(wf, /:\s*write\b/, `${file} grants a write scope somewhere`);
+    assert.doesNotMatch(
+      wf,
+      /^ {4}permissions:/m,
+      `${file} sets a job-level permissions block, which can widen the top-level one`,
+    );
+  }
+});
+
+test('no workflow contains a credential literal', () => {
+  const CREDENTIAL = /(?:ghp_|github_pat_|gho_|AKIA|-----BEGIN [A-Z ]*PRIVATE KEY-----)/;
+  for (const file of workflowFiles()) {
+    assert.doesNotMatch(read(file), CREDENTIAL, `${file} contains a credential literal`);
+    assert.doesNotMatch(
+      read(file),
+      /\b[A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)\s*:\s*['"]?[A-Za-z0-9_\-]{16,}/,
+      `${file} assigns a hard-coded credential value`,
+    );
+  }
+});
+
+test('every action in every workflow is pinned to a commit SHA, not a tag', () => {
+  for (const file of workflowFiles()) {
+    for (const [, ref] of read(file).matchAll(/^\s*(?:-\s*)?uses:\s*(\S+)/gm)) {
+      assert.match(
+        ref,
+        /@[0-9a-f]{40}$/,
+        `${file} uses ${ref}, which is a moving tag; pin it to a 40-character commit SHA`,
+      );
+    }
+  }
 });
 
 test('CI does not use the gitleaks action, whose commit range can be empty', () => {

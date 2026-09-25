@@ -248,3 +248,39 @@ test('the browser smoke test retains screenshots and traces on failure', () => {
     assert.ok(ignore.includes(entry), `${entry} must be gitignored, never committed`);
   }
 });
+
+const VALIDATE_STEPS = [
+  'format:check',
+  'lint',
+  'typecheck',
+  'test:repo',
+  'test:coverage',
+  'build',
+  'test:integration',
+  'test:e2e',
+  'scan:source',
+  'scan:secrets',
+  'scan:secrets:history',
+];
+
+test('one command runs the complete local validation', () => {
+  const scripts = JSON.parse(read('package.json')).scripts;
+  assert.ok(scripts.validate, 'a validate script must exist');
+  for (const step of VALIDATE_STEPS) {
+    assert.ok(scripts[step], `validate refers to ${step}, which must itself be a script`);
+    assert.match(
+      scripts.validate,
+      new RegExp(`\\bnpm run ${step}\\b`),
+      `validate must run ${step}`,
+    );
+  }
+});
+
+test('validate runs the cheap checks before the expensive ones', () => {
+  const validate = JSON.parse(read('package.json')).scripts.validate;
+  const at = (step) => validate.indexOf(`npm run ${step}`);
+  assert.ok(at('format:check') < at('lint'), 'format check is cheapest, it goes first');
+  assert.ok(at('lint') < at('typecheck'), 'lint before type-check');
+  assert.ok(at('typecheck') < at('test:coverage'), 'type-check before unit tests');
+  assert.ok(at('build') < at('test:e2e'), 'the browser test needs the build to exist first');
+});

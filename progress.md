@@ -76,9 +76,38 @@ The owner decided not to hand the build to another agent, so the handoff pull re
 
 Test first: the three handoff tests were replaced by three tests requiring those sections and forbidding any stale reference to a handoff document. They failed against the old files (3 failures), then passed after the move. `npm run test:repo` is 31 of 31.
 
-## 2026-09-24 (bug fixes from the issue tracker, pull request 3)
+## 2026-09-24 (bug fixes from the issue tracker)
 
-### Build tooling (#10, #11)
+Five open issues carry the `bug` label: #3, #4, #5, #10 and #11. Each was reproduced before any fix. Plan: three independent pull requests off `main`, not stacked. (1) scanner rules, #4 and #5, which share one script and one test file. (2) CI gitleaks, #3. (3) build tooling, #10 and #11, which share one integration test file.
+
+### Pull request 1: scanner rules (#4, #5)
+
+Reproduced: an SSH-style git remote was flagged as an email address, a bare absolute home path with no trailing slash was missed, and a tilde path was not flagged. Owner decision: tilde paths stay allowed because they name no user.
+
+Test first: six new cases in `tests/repo/source-protection.test.mjs`. Three failed (SSH remote allowed, a `package.json` repository field passes, bare home path flagged) and three were regression guards that already passed (a personal address whose local part merely resembles git is still flagged, tilde paths allowed, a bare prefix with no user name is not flagged). After the fix, `npm run test:repo` is 37 of 37 and `npm run scan:source` passes. Mutation checks: removing the `git` exemption failed the two SSH tests, restoring the trailing-slash requirement failed the bare-path test, and allowing every local part failed the two personal-address tests.
+
+Slip recorded as data: after the mutation checks I ran `git checkout` on the script before the fix was committed, which restored the old version and discarded the fix. It was re-applied from the same edit and committed immediately. Lesson: commit before mutation-testing, or keep a backup until the work is committed.
+
+`research.md` now describes the rule exactly as implemented and lists only the remaining lockfile gap (issue 6).
+
+### Pull request 2: CI gitleaks (#3)
+
+Reproduced from the CI logs of the pushes to `main` for the merges of pull requests 2 and 9: `0 commits scanned`, then a green "No leaks detected". Root cause confirmed: the action's push range is `--no-merges --first-parent`, which is empty after a merge-commit merge. Owner decisions: replace the action with a pinned CLI, and prove failure on a throwaway branch.
+
+Design: install gitleaks 8.30.1 in CI with its SHA-256 verified (checksum from the official release, matched against my own download), scan the full tree with `npm run scan:secrets` and the full history with a new `npm run scan:secrets:history`. The history script parses gitleaks' own "N commits scanned" line and fails on zero, which also covers an empty repository (gitleaks prints "0 commits scanned" and exits 0 there). Dropping the action also removes the `pull-requests: read` scope, so the token is `contents: read` only.
+
+Test first: workflow-shape tests in `tests/repo/repo-structure.test.mjs` and a new `tests/repo/scan-history.test.mjs` that runs the real gitleaks against temporary repositories. Red: 3 workflow tests failed and the script module was missing. One new test passed vacuously (install-before-tests order, because a missing step compares as -1), so it was tightened to require both steps. Green: `npm run test:repo` 40 of 40. Those tests need gitleaks, so locally they skip without it and in CI (`CI` set) a missing gitleaks fails them. Mutation checks: dropping the zero guard failed the zero-commits test, swallowing gitleaks' exit code failed the leak test, and restoring the action failed the no-action test.
+
+Backfill: `gitleaks git` over the full local history scanned 19 commits with no leaks (20 once this branch's first commit is included), and the full-tree scan is clean. That covers the earlier specification commit that CI never scanned.
+
+Slip recorded as data: my first docs commit on this branch was pushed incomplete. A script edited `research.md` and then failed on a `plan.md` anchor that differs on this branch, and my shell command chain went on to commit and push anyway. This entry and the `plan.md` change landed in the next commit. Lesson: run multi-file edit scripts inside a `&&` chain so a failure stops the commit.
+
+
+Real-CI evidence for issue 3, recorded on the pull request run and a throwaway branch:
+- The passing run on this branch (workflow run 36089706173) verified the gitleaks checksum (`OK`), scanned the working tree (~322 KB, no leaks) and scanned **22 commits** of history (no leaks). It ran the repo tests too, including the ones that call the real gitleaks.
+- A throwaway pull request with one fake credential-shaped value made CI fail (workflow run 36089769556): the `Secrets scan (full working tree)` step reported `leaks found: 1` and the history step was skipped. That pull request was closed and its branch deleted, and no remote branch remains.
+- Still to check after merge: the push-to-`main` run must report more than zero commits scanned. That check is recorded when the pull request is merged.
+### Pull request 3: Build tooling (#10, #11)
 
 Both reproduced. #11: `rm -rf` of every `dist`, then `npm test`, gave 4 failed and 20 passed with "Failed to resolve entry for package", and deleting only the three `tsbuildinfo` files restored 24 of 24. #10: with `envPrefix` widened to include `QUACK_` and the guard call removed, the canary test still passed.
 

@@ -23,7 +23,8 @@
     "test": "vitest run",
     "test:repo": "node --test \"tests/repo/*.test.mjs\"",
     "scan:source": "node scripts/source-protection-scan.mjs",
-    "scan:secrets": "gitleaks dir . --no-banner --redact"
+    "scan:secrets": "gitleaks dir . --no-banner --redact",
+    "scan:secrets:history": "node scripts/scan-history.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

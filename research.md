@@ -50,7 +50,7 @@ Lint and format on variant A: ESLint 10.11.0, `@eslint/js` 10.0.1, typescript-es
 **Decisions:**
 - **Use the PRD pins exactly** (variant A) plus the lint stack above and `@types/node` 24.13.6 (the Node 24 line).
 - **TypeScript stays on 6.0.2.** typescript-eslint 8.70.1 declares `typescript >=4.8.4 <6.1.0`, so TypeScript 7 would leave the required lint stack unsupported, even though the toy project compiled. Revisit when typescript-eslint supports 7.
-- **Vitest stays on 4.1.10.** Vitest 5.0.1 also passed the toy project, but nothing needs it. Upgrade deliberately later.
+- **Vitest stays on the 4.1 line, at 4.1.11 (a deviation from the PRD pin 4.1.10).** `npm audit` on the real repository reported a moderate advisory (path traversal or arbitrary file read through `@vitest/mocker`, GHSA-82fw-gwwq-j7x9) affecting Vitest and `@vitest/coverage-v8` up to 4.1.10. 4.1.11 fixes it and `npm audit` reports 0 vulnerabilities after the bump. Vitest 5.0.1 also passed the toy project, but nothing needs it. Upgrade to 5 deliberately later.
 - Variant B passing means the newer minors are a low-risk future upgrade. It is not a reason to deviate now.
 
 **Native module and npm 11 install scripts.** npm 11.19 reports better-sqlite3's `node-gyp rebuild` install script as "not yet covered by allowScripts" and does not run it. The module still loads because the package ships prebuilt binaries for darwin arm64 and x64, linux x64 and arm64 (glibc and musl) and win32, and no compile is needed. Keep the script unapproved: it is unnecessary and install scripts run arbitrary code. Task 003 must confirm the Linux CI runner loads the module the same way.

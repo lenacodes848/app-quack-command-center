@@ -6,7 +6,7 @@
 
 **Architecture:** Root workspace with `apps/server`, `apps/web`, and two shared packages (`packages/config`, `packages/contracts`). Only packages that TASK_002 needs are created. The rest of the PRD 3.8 layout arrives with the task that fills each package, to avoid empty placeholders. Libraries build to `dist` with `tsc -b` project references. Vitest and Vite resolve workspace packages from source through aliases.
 
-**Tech Stack:** Node 24.21.0, TypeScript 6.0.2, Zod 4.4.3, React 19.2.8, Vite 8.1.5, `@vitejs/plugin-react` 6.0.4, Tailwind CSS 4.3.3, Vitest 4.1.10 with `@vitest/coverage-v8` 4.1.10, ESLint 10.11.0, typescript-eslint 8.70.1, Prettier 3.9.9. These exact versions were verified together on 2026-09-24, see `research.md`.
+**Tech Stack:** Node 24.21.0, TypeScript 6.0.2, Zod 4.4.3, React 19.2.8, Vite 8.1.5, `@vitejs/plugin-react` 6.0.4, Tailwind CSS 4.3.3, Vitest 4.1.11 with `@vitest/coverage-v8` 4.1.11 (4.1.10, the PRD pin, has an advisory in `@vitest/mocker`, fixed in 4.1.11), ESLint 10.11.0, typescript-eslint 8.70.1, Prettier 3.9.9. These exact versions were verified together on 2026-09-24, see `research.md`.
 
 **Spec:** `PERSONAL_AI_COMMAND_CENTER_PRD.md` TASK_002 (acceptance criteria 1 to 7, test requirements 1 to 4) and section 2.3. Decisions and the version spike: `research.md`. Overall phase plan: `docs/superpowers/plans/2026-09-24-personal-ai-command-center.md`.
 
@@ -30,6 +30,7 @@ package.json                     workspaces root, scripts, exact devDependencies
 .npmrc                           save-exact, engine-strict
 tsconfig.base.json               shared strict compiler options
 tsconfig.json                    solution file with project references
+tsconfig.eslint.json             all TypeScript incl. tests, no emit, used only by ESLint
 eslint.config.js                 flat config, type-aware, TS and TSX only
 .prettierrc.json  .prettierignore
 vitest.config.ts                 include globs, workspace aliases
@@ -52,7 +53,7 @@ tests/integration/build.integration.test.ts
 
 **Files:**
 - Modify: `package.json`
-- Create: `.npmrc`, `tsconfig.base.json`, `tsconfig.json`, `eslint.config.js`, `.prettierrc.json`, `.prettierignore`, `vitest.config.ts`
+- Create: `.npmrc`, `tsconfig.base.json`, `tsconfig.json`, `tsconfig.eslint.json`, `eslint.config.js`, `.prettierrc.json`, `.prettierignore`, `vitest.config.ts`
 - Create: `packages/contracts/{package.json,tsconfig.json,src/index.ts,src/index.test.ts}`
 
 **Interfaces:**
@@ -95,7 +96,7 @@ Root `package.json` (keep the existing three scripts and add the rest):
     "build": "npm run build:server && npm run build:web",
     "build:server": "tsc -b apps/server",
     "build:web": "npm run build --workspace @quack/web",
-    "typecheck": "tsc -b && tsc -p apps/web",
+    "typecheck": "tsc -b",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -107,12 +108,12 @@ Root `package.json` (keep the existing three scripts and add the rest):
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "24.13.6",
-    "@vitest/coverage-v8": "4.1.10",
+    "@vitest/coverage-v8": "4.1.11",
     "eslint": "10.11.0",
     "prettier": "3.9.9",
     "typescript": "6.0.2",
     "typescript-eslint": "8.70.1",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   }
 }
 ```
@@ -209,7 +210,7 @@ export default tseslint.config(
   ...tseslint.configs.strictTypeChecked,
   {
     files: ['**/*.ts', '**/*.tsx'],
-    languageOptions: { parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } },
+    languageOptions: { parserOptions: { project: ['./tsconfig.eslint.json'], tsconfigRootDir: import.meta.dirname } },
   },
 );
 ```
@@ -227,8 +228,10 @@ node_modules
 dist
 coverage
 package-lock.json
-PERSONAL_AI_COMMAND_CENTER_PRD.md
+*.md
 ```
+
+Markdown is not formatted: Prettier would rewrite every existing table and document. `tsconfig.eslint.json` exists because the package `tsconfig.json` files exclude test files from the build, so ESLint's project service cannot see them. Its `include` is `packages/*/src`, `apps/*/src`, `tests/**/*.ts`, with `noEmit`, `composite: false`, `jsx: react-jsx` and the DOM libs. Also add `*.tsbuildinfo` to `.gitignore`, because `tsc -b` writes one next to each composite package.
 
 - [ ] **Step 3: Install and run the smoke test to see it fail**
 
@@ -716,7 +719,9 @@ createRoot(root).render(
 
 This keeps `npm run build:web` working from a clean checkout with no prior `tsc -b`.
 
-- [ ] **Step 2: Type-check and build**
+- [ ] **Step 2: Add the web project to the type-check and build**
+
+In the root `package.json` change the script to `"typecheck": "tsc -b && tsc -p apps/web"`, so the web app is type-checked from the root as well.
 
 Run: `npm install && npm run typecheck && npm run build:web`
 Expected: exits 0 and `apps/web/dist/index.html` exists.
@@ -785,7 +790,7 @@ describe('server build', () => {
 
 **Files:** modify any file the linters flag.
 
-- [ ] **Step 1:** `npm run format:check` → fails on files that are not formatted. Run `npm run format`, then `git diff --stat` and confirm only formatting changed. Do not reformat `PERSONAL_AI_COMMAND_CENTER_PRD.md` (ignored).
+- [ ] **Step 1:** `npm run format:check` → fails on files that are not formatted. Run `npm run format`, then `git diff --stat` and confirm only formatting changed. Markdown files are ignored by Prettier. Prettier's `singleQuote` also rewrites quotes in the Phase 0 workflow file, so keep `tests/repo/repo-structure.test.mjs` accepting either quote style for `GITLEAKS_ENABLE_COMMENTS`.
 - [ ] **Step 2:** `npm run lint` → fix every reported problem in the new TypeScript. Do not disable a rule to make it pass unless you add a one-line comment giving the reason.
 - [ ] **Step 3:** `npm run test:repo` still passes, including the source protection scan of the new files.
 - [ ] **Step 4: Commit.** `git commit -am "Format and lint the workspace"`

@@ -18,7 +18,6 @@ const REQUIRED_FILES = [
   '.nvmrc',
   '.gitignore',
   '.github/workflows/secrets.yml',
-  'HANDOFF.md',
 ];
 
 test('contains every required project file', () => {
@@ -80,55 +79,27 @@ test('excluded tasks are recorded as not_applicable with a governing decision', 
   }
 });
 
-test('HANDOFF.md gives a new agent state, next steps, gates and working rules', () => {
-  const text = read('HANDOFF.md');
-  for (const heading of [
-    'Read this first',
-    'Current state',
-    'Decisions already made',
-    'Environment',
-    'Working method',
-    'Owner gates',
-    'Next steps',
-    'Gotchas and lessons',
-    'Open items',
-  ]) {
-    assert.match(
-      text,
-      new RegExp(`^##\\s+.*${heading}`, 'm'),
-      `HANDOFF.md is missing the "${heading}" section`,
-    );
+test('plan.md records the owner gates and open items that stop the build', () => {
+  const text = read('plan.md');
+  assert.match(text, /^## Owner gates$/m);
+  assert.match(text, /^## Open items$/m);
+  for (const gate of [/device pairing design/i, /public hostname/i, /second provider/i, /tmux/i]) {
+    assert.match(text, gate, `plan.md owner gates must mention ${String(gate)}`);
   }
 });
 
-test('HANDOFF.md points at the task that plan.md says is current', () => {
-  const current = read('plan.md').match(/^Current task:\s*(TASK_\d{3})\s*$/m)?.[1];
-  assert.ok(current, 'plan.md has no current task');
-  assert.ok(read('HANDOFF.md').includes(current), `HANDOFF.md must mention ${current}`);
+test('research.md records environment notes and known follow-ups', () => {
+  const text = read('research.md');
+  assert.match(text, /^## Environment notes$/m);
+  assert.match(text, /^## Follow-ups and known gaps$/m);
+  assert.match(text, /branch protection/i);
+  assert.match(text, /nvm use/);
 });
 
-test('HANDOFF.md links only to files that exist', () => {
-  const links = [
-    ...read('HANDOFF.md').matchAll(/`((?:[\w.-]+\/)*[\w.-]+\.(?:md|mjs|yml|json))`/g),
-  ].map((m) => m[1]);
-  const missing = links.filter(
-    (p) =>
-      !p.includes('*') &&
-      !p.startsWith('docs/superpowers/plans/YYYY') &&
-      !existsSync(join(root, p)),
-  );
-  const allowedFuture = new Set([
-    '.source-protection-denylist',
-    'package-lock.json',
-    'tsconfig.base.json',
-    'providers.registry.json',
-  ]);
-  const real = missing.filter(
-    (p) =>
-      !allowedFuture.has(p) &&
-      !/^(apps|packages|config|tests\/(contracts|integration|security|browser))\//.test(p),
-  );
-  assert.deepEqual(real, [], `HANDOFF.md references missing files: ${real.join(', ')}`);
+test('no stale reference to a handoff document remains', () => {
+  for (const f of ['plan.md', 'research.md', 'discovery.md']) {
+    assert.doesNotMatch(read(f), /HANDOFF\.md/, `${f} still references HANDOFF.md`);
+  }
 });
 
 test('progress.md has a dated entry', () => {

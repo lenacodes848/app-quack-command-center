@@ -87,6 +87,22 @@ Lint and format on variant A: ESLint 10.11.0, `@eslint/js` 10.0.1, typescript-es
 - The PRD data model (3.6) has no table for application sessions. Task 013 adds an `app_sessions` migration.
 - Story 8 (stop a turn) is in the owner's second wave, but Task 017 bundles interrupt with the composer, so basic stop ships in Phase 4.
 
+## Environment notes
+
+- Always run `nvm use` in this repository. The machine default is Node 22, the project needs Node 24.
+- `.source-protection-denylist` is gitignored and exists only on this machine. It holds the owner's name. To recreate it, copy `.source-protection-denylist.example` to that name and add the owner's name and any private identifiers, one per line. Never commit it.
+- `gh` is authenticated and pushing over HTTPS works. The repository is private, default branch `main`, work goes through pull requests, and stacked pull requests retarget automatically when the parent merges.
+- Not installed: Codex CLI, Hermes, `cloudflared`, Playwright browsers.
+- The original starter-kit folder in the owner's Downloads folder is reference only. Everything needed is in this repository.
+- Node 24's test runner needs a quoted glob: `node --test "tests/repo/*.test.mjs"`.
+
+## Follow-ups and known gaps
+
+- **Branch protection is unavailable** on this private repository's plan (the API refuses with HTTP 403 and asks for a paid plan or a public repository). TASK_003 criterion 6, "CI blocks merging when any required check fails", therefore cannot be enforced by GitHub. Owner decision needed: make the repository public, upgrade the plan, or use a local pre-push hook.
+- **CI hardening, deferred to TASK_003:** pin third-party actions to commit SHAs, add full-tree and full-history gitleaks so a merge to `main` is scanned (a merge commit is scanned by nothing today), run `npm ci`, type-check, lint, Vitest and the builds in CI, and confirm the Linux runner loads better-sqlite3 from its prebuilt binary.
+- **Scanner rule gaps** (raised in the PR 2 review, not yet fixed): the email rule flags SSH-style git remotes (user `git` at a host) and any other user-at-host text except the reserved example domains, so a `repository` field in `package.json` would fail. The home-directory rule needs a trailing slash after the user name, so a bare path at end of line is missed, and `~/...` paths are not covered. `package-lock.json` is excluded from the scanner at the repository root only. Fix each with a test first, and never loosen a rule to make a build pass.
+- **Tests built from fragments:** the scanner tests assemble their fixtures from string fragments so the test source does not match its own rules. Keep that pattern.
+
 ## Official documentation links
 
 Recheck before each adapter. All are listed in PRD section 16.

@@ -90,3 +90,20 @@ Slip recorded as data: after the mutation checks I ran `git checkout` on the scr
 
 `research.md` now describes the rule exactly as implemented and lists only the remaining lockfile gap (issue 6).
 
+### Pull request 2: CI gitleaks (#3)
+
+Reproduced from the CI logs of the pushes to `main` for the merges of pull requests 2 and 9: `0 commits scanned`, then a green "No leaks detected". Root cause confirmed: the action's push range is `--no-merges --first-parent`, which is empty after a merge-commit merge. Owner decisions: replace the action with a pinned CLI, and prove failure on a throwaway branch.
+
+Design: install gitleaks 8.30.1 in CI with its SHA-256 verified (checksum from the official release, matched against my own download), scan the full tree with `npm run scan:secrets` and the full history with a new `npm run scan:secrets:history`. The history script parses gitleaks' own "N commits scanned" line and fails on zero, which also covers an empty repository (gitleaks prints "0 commits scanned" and exits 0 there). Dropping the action also removes the `pull-requests: read` scope, so the token is `contents: read` only.
+
+Test first: workflow-shape tests in `tests/repo/repo-structure.test.mjs` and a new `tests/repo/scan-history.test.mjs` that runs the real gitleaks against temporary repositories. Red: 3 workflow tests failed and the script module was missing. One new test passed vacuously (install-before-tests order, because a missing step compares as -1), so it was tightened to require both steps. Green: `npm run test:repo` 40 of 40. Those tests need gitleaks, so locally they skip without it and in CI (`CI` set) a missing gitleaks fails them. Mutation checks: dropping the zero guard failed the zero-commits test, swallowing gitleaks' exit code failed the leak test, and restoring the action failed the no-action test.
+
+Backfill: `gitleaks git` over the full local history scanned 19 commits with no leaks (20 once this branch's first commit is included), and the full-tree scan is clean. That covers the earlier specification commit that CI never scanned.
+
+Slip recorded as data: my first docs commit on this branch was pushed incomplete. A script edited `research.md` and then failed on a `plan.md` anchor that differs on this branch, and my shell command chain went on to commit and push anyway. This entry and the `plan.md` change landed in the next commit. Lesson: run multi-file edit scripts inside a `&&` chain so a failure stops the commit.
+
+
+Real-CI evidence for issue 3, recorded on the pull request run and a throwaway branch:
+- The passing run on this branch (workflow run 36089706173) verified the gitleaks checksum (`OK`), scanned the working tree (~322 KB, no leaks) and scanned **22 commits** of history (no leaks). It ran the repo tests too, including the ones that call the real gitleaks.
+- A throwaway pull request with one fake credential-shaped value made CI fail (workflow run 36089769556): the `Secrets scan (full working tree)` step reported `leaks found: 1` and the history step was skipped. That pull request was closed and its branch deleted, and no remote branch remains.
+- Still to check after merge: the push-to-`main` run must report more than zero commits scanned. That check is recorded when the pull request is merged.

@@ -204,3 +204,92 @@ test('a genuinely personal address in file content is still a finding', () => {
   assert.equal(findings.length, 1);
   assert.equal(findings[0].rule, 'email-address');
 });
+
+test('a malformed identity record is a finding, not silently dropped', () => {
+  const findings = scanIdentities(
+    [{ commit: 'abc1234', field: 'record', value: '', malformed: true }],
+    [],
+  );
+  assert.deepEqual(findings, [
+    { file: 'commit abc1234', line: 'record', rule: 'malformed-identity' },
+  ]);
+});
+
+test('a personal address in a NAME field is still a finding, not just an email field', () => {
+  const findings = scanIdentities(identity('someone@example.com', 'author-name'), []);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, 'identity-email');
+});
+
+test('a GitHub noreply address in a NAME field is allowed', () => {
+  assert.deepEqual(scanIdentities(identity(NOREPLY_USER, 'committer-name'), []), []);
+});
+
+// Builds a real, throwaway git repository so readIdentities is exercised against
+// git's actual `-z`/unit-separator output, not a hand-built fixture array.
+function identityRepo() {
+  const dir = mkdtempSync(join(tmpdir(), 'ident-'));
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+  return dir;
+}
+
+function commitWithIdentity(dir, env) {
+  execFileSync('git', ['commit', '--allow-empty', '-q', '-m', 'x'], {
+    cwd: dir,
+    env: { ...process.env, ...env },
+  });
+}
+
+test('a unit separator embedded in an author name is a malformed-identity finding, not a silent field shift', () => {
+  const dir = identityRepo();
+  try {
+    // The real defect: an author NAME containing the field delimiter shifts every
+    // later field by one, so a naive 5-way destructure would silently swallow the
+    // 6th field (here, a personal address) instead of ever seeing it.
+    const nameWithSeparator = ['Bob', 'bot@users.noreply.github.com'].join('\x1f');
+    commitWithIdentity(dir, {
+      GIT_AUTHOR_NAME: nameWithSeparator,
+      GIT_AUTHOR_EMAIL: NOREPLY_USER,
+      GIT_COMMITTER_NAME: NOREPLY_BOT,
+      GIT_COMMITTER_EMAIL: NOREPLY_BOT,
+    });
+    const findings = scanIdentities(readIdentities(dir), []);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].rule, 'malformed-identity');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a personal address used as a real commit author NAME is caught end to end', () => {
+  const dir = identityRepo();
+  try {
+    commitWithIdentity(dir, {
+      GIT_AUTHOR_NAME: 'someone@example.com',
+      GIT_AUTHOR_EMAIL: NOREPLY_USER,
+      GIT_COMMITTER_NAME: NOREPLY_BOT,
+      GIT_COMMITTER_EMAIL: NOREPLY_BOT,
+    });
+    const findings = scanIdentities(readIdentities(dir), []);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].rule, 'identity-email');
+    assert.equal(findings[0].line, 'author-name');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readIdentities fails loudly with a bare message, never printing raw git output', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'notgit-'));
+  try {
+    assert.throws(
+      () => readIdentities(dir),
+      (err) => {
+        assert.equal(err.message, 'readIdentities: failed to read commit metadata from git log');
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

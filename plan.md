@@ -12,7 +12,7 @@ Current task: TASK_003
 
 The owner stopped the infrastructure work mid-flight: *"stop fixing linting errors and issues that aren't core to building a functioning product... we are going for the minimal viable product."* They then chose a **thin vertical slice** over the PRD phase order, and **light review** over the subagent review loop: no per-task plan documents, no per-task reviewer subagents, no mutation-checking every guard. Build, run the checks, be honest when something breaks, keep moving.
 
-**The slice lives on branch `feat/mvp-claude-adapter`** (not merged, not pushed as of 2026-09-25). `main` is merged into it and `npm run validate` exits 0.
+**The slice lives on branch `feat/mvp-claude-adapter`** (pushed to `origin`, not merged as of 2026-09-25). `main` is merged into it and `npm run validate` exits 0.
 
 - `packages/adapter` drives Claude Code non-interactively with `claude --print --output-format stream-json --verbose`, parsing NDJSON into normalized events and resuming by the `session_id` from the init event. **No pseudo-terminal and no process supervisor** — that is what collapses most of the PRD's Phase 2 for the first version.
 - `apps/server` streams a turn to the browser as newline-delimited JSON over a plain `POST /api/turn`. A turn is request-shaped, so a streaming response fits it without a WebSocket dependency. One in-memory session, one turn at a time. Sessions run in `$DATA_DIR/workspace`, never a path a request chooses.
@@ -20,11 +20,19 @@ The owner stopped the infrastructure work mid-flight: *"stop fixing linting erro
 
 **Deliberately absent:** persistence (a restart loses the thread), authentication, multiple sessions, attachments, permission prompts. The PRD's 34-task graph below is background, not the plan of record. Do not restart the ceremony unless the owner asks.
 
-**The immediate next step is to run the slice against the real CLI**, which is an owner gate: it spends the owner's subscription quota and must use a scratch directory, never the owner's own session or configuration. After that, persistence is the natural next increment, because "sessions survive a restart" is the PRD's headline promise and the slice does not have it.
+**Done 2026-09-25: the slice has been run against the real CLI** with the owner's approval, in a scratch directory. It works, and it found two defects that no test against a fake could have found — the agent could not write a file, and it inherited the owner's own connectors. Both are fixed; see the last entry of `progress.md` and "Verified provider behaviour" in `research.md`. Persistence is now the next increment, because "sessions survive a restart" is the PRD's headline promise and the slice does not have it.
 
 ## Next steps (resume here)
 
-State on 2026-09-25: `main` is the only branch, locally and on the remote, and it is clean. Every check passes on it: 28 Vitest tests, 47 repository tests, lint, type-check, format check, the full-tree and full-history gitleaks scans (26 commits), and `npm audit`. To confirm before starting, run `nvm use`, `git pull`, `npm run test:repo`, `npm test`. The working rules and shell pitfalls are in `research.md`. Read the last entry of `progress.md` first.
+State on 2026-09-25, end of the live-run session. The product is the MVP vertical slice on `feat/mvp-claude-adapter`: the Claude Code adapter, the streaming HTTP server and the chat UI. `npm run validate` exits 0 on it, all eleven checks, 87 unit tests, 8 integration, 84 repository tests, branch coverage 81.63 percent, both scans clean over 56 commits. To confirm before starting, run `nvm use`, `git pull`, `npm run validate`. The working rules and shell pitfalls are in `research.md`. Read the last entry of `progress.md` first.
+
+**The slice is live-verified.** The owner approved the first live provider gate and the real CLI has now been driven end to end: streaming, `--resume` continuity, workspace isolation, tool events and the browser UI. That gate is closed. Two defects it found are fixed, and the verified provider behaviour behind them is in `research.md` under "Verified provider behaviour" — read it before touching adapter flags, because three plausible-looking approaches there are wrong.
+
+**The next increment is persistence.** Nothing survives a restart, and "sessions survive a restart" is the PRD's headline promise. Take it in the TASK_005 shape; better-sqlite3 13.0.1 is already verified.
+
+**Deliberately not done, and worth an owner decision when it comes up:** per-tool permission prompts in the browser. The dashboard currently allows file edits and forbids commands outright. Bridging a real prompt needs `--permission-prompts host` with `--input-format stream-json`, which is a substantially larger change than the slice and was declined for the MVP.
+
+**Earlier state, kept for context:** on 2026-09-25 `main` was the only branch and clean, passing 28 Vitest tests and 47 repository tests. Stale local branches `docs/session-wrap-up` and `phase-1/task-003-ci-validation` still exist though their pull requests merged; delete them at the next cleanup.
 
 **Decided 2026-09-25, do not re-ask: branch protection.** Classic branch protection returned HTTP 403 on the old private plan, so the owner made the repository **public** specifically to get required status checks. Use the repository-rulesets endpoint, which answers `200` here while `branches/main/protection` still answers `403`. The ruleset is deliberately not created yet: one that requires a check a branch's workflows do not produce would block that branch from merging at all, so it waits until the open pull requests have landed. Until it exists, TASK_003 criterion 6 and test requirement 1 are unmet and their PRD boxes stay unticked.
 
@@ -55,7 +63,7 @@ Do not pass any of these without the owner's explicit approval.
 | Gate | When | Rule |
 |---|---|---|
 | Application auth design | Before any TASK_013 code | Write the device pairing design into `research.md` (planned shape is there) and get explicit approval. It adds an `app_sessions` table the PRD data model lacks. |
-| First live provider smoke test | End of Phase 3 | Announce it. Use a scratch directory and a dedicated test session, never the owner's own session or configuration. Live tests spend the owner's subscription quota. |
+| ~~First live provider smoke test~~ **CLOSED 2026-09-25** | Was end of Phase 3, taken early with the MVP slice | Approved and done. Ran in `/tmp/quack-live` against CLI 2.1.282. Further live runs in a scratch directory no longer need a fresh approval; a run touching the owner's own session, configuration or working directories still does. |
 | Level One trial | End of Phase 4 | The owner uses it with Claude Code and gives feedback before Phase 5. |
 | Second provider | Start of Phase 6 | Codex (needs the CLI and a subscription), a hosted model such as NanoGPT (pay per token, the largest task, 028), or Hermes. Needed for cross-provider handoff (021). |
 | Public hostname | Phase 6, TASK_023 | Order is fixed: Access application and policy first, tunnel route second. No public hostname without explicit approval. A knowledgeable human reviews security before routine remote use. |

@@ -25,13 +25,39 @@ export interface ClaudeTurnOptions {
   sessionId?: string | undefined;
   /** Override the executable, which the tests use to run a fake. */
   binary?: string | undefined;
-  /** Remove the built-in tools that run commands or code. */
+  /**
+   * Remove the built-in tools that run commands or code, and ignore the
+   * machine's user-level Claude configuration. Defaults to true; see
+   * {@link DEFAULT_PERMISSION_MODE} for why the safe posture is the default.
+   */
   restricted?: boolean | undefined;
+  /** How much the agent may do without being asked. */
+  permissionMode?: PermissionMode | undefined;
   /** Abort the turn early. */
   signal?: AbortSignal | undefined;
+  /** The environment to derive the child's from. Defaults to this process's. */
+  parentEnv?: NodeJS.ProcessEnv | undefined;
 }
 
+/** The permission modes the CLI accepts, as of 2.1.282. */
+export type PermissionMode =
+  'acceptEdits' | 'auto' | 'bypassPermissions' | 'manual' | 'dontAsk' | 'plan';
+
 export const DEFAULT_BINARY = 'claude';
+
+/**
+ * Why edits are accepted rather than prompted.
+ *
+ * With `--print` there is no terminal to answer a permission prompt, and the
+ * CLI's `--permission-prompts` defaults to `none`, which denies anything that
+ * would ask. Left at the default the dashboard can hold a conversation and
+ * cannot change a single file, which was confirmed against the real CLI: it
+ * announced the Write tool and then reported the write refused.
+ *
+ * `acceptEdits` lets it edit files in the workspace it was given. It cannot
+ * run commands, because restricted mode removes those tools entirely.
+ */
+export const DEFAULT_PERMISSION_MODE: PermissionMode = 'acceptEdits';
 
 /**
  * Build the argv for one turn.
@@ -42,9 +68,54 @@ export const DEFAULT_BINARY = 'claude';
  */
 export function buildArgs(options: ClaudeTurnOptions): string[] {
   const args = ['--print', options.prompt, '--output-format', 'stream-json', '--verbose'];
+  args.push('--permission-mode', options.permissionMode ?? DEFAULT_PERMISSION_MODE);
+  // Opt out, not in. A dashboard turn that silently inherited the owner's own
+  // configuration would arrive holding their personal skills and every
+  // connector they have authorized, which is far more authority than asking a
+  // question in a scratch workspace should carry.
+  if (options.restricted !== false) {
+    args.push('--restricted');
+    // Restricted mode does not reach the connectors that belong to the
+    // signed-in account, only the ones named in configuration files. Denying
+    // the namespace is what actually removes them.
+    args.push('--disallowedTools', DENY_ACCOUNT_CONNECTORS);
+  }
   if (options.sessionId !== undefined) args.push('--resume', options.sessionId);
-  if (options.restricted === true) args.push('--restricted');
   return args;
+}
+
+/**
+ * The tool pattern that removes the signed-in account's connectors.
+ *
+ * Measured against CLI 2.1.282, restricted mode alone still handed a turn 114
+ * tools, among them the owner's Gmail, Google Drive, Google Calendar and
+ * Blotato. Denying this namespace brought the same turn down to 21 tools with
+ * Read and Write intact. Without it the dashboard would be able to read the
+ * owner's mail, which is far more authority than a question typed into a
+ * scratch workspace should carry — and it becomes a much sharper problem once
+ * the dashboard is reachable from anywhere.
+ */
+export const DENY_ACCOUNT_CONNECTORS = 'mcp__*';
+
+/**
+ * Variables the child must not inherit.
+ *
+ * The dashboard may itself have been started from inside a Claude Code
+ * session, and a plain spawn copies the whole environment. That would hand the
+ * child its parent's session id and messaging socket, making it a participant
+ * in a conversation it knows nothing about.
+ */
+function isOwnSessionVariable(key: string): boolean {
+  return key === 'CLAUDECODE' || key === 'AI_AGENT' || key.startsWith('CLAUDE_CODE_');
+}
+
+/** The environment one turn runs with: the parent's, less the parent's session. */
+export function childEnv(parentEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(parentEnv)) {
+    if (!isOwnSessionVariable(key)) env[key] = value;
+  }
+  return env;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -126,6 +197,7 @@ export async function* runClaudeTurn(options: ClaudeTurnOptions): AsyncGenerator
     cwd: options.cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
     signal: options.signal,
+    env: childEnv(options.parentEnv ?? process.env),
   });
 
   let stderr = '';

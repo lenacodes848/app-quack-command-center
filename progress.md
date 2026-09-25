@@ -165,3 +165,35 @@ Nothing has yet called the real CLI. Every test runs against a fake binary writt
 Merging `main` into that branch surfaced two semantic conflicts a clean auto-merge could not see, both from tests that assumed the old placeholder server which printed a line and exited: the CLI bootstrap unit test, and the build integration test that ran the server with `execFileSync` and waited for it to exit. The server now binds a port, so both were rewritten to start it, assert, and shut it down — the integration one on its own port so it cannot collide with a dashboard already running. Fixing them exposed a third thing: `start()` had no `error` handler, so a port clash surfaced as an unhandled event and a raw Node stack trace. It now explains itself, and both branches of that handler are tested.
 
 Branch coverage fell under the 80 percent floor once the slice's code counted. Raised back to 80.43 by testing the paths that were missing — a turn failing mid-stream, a non-Error thrown mid-stream, the busy slot being released after a failure, and the two startup-failure branches — rather than by lowering the threshold. `npm run validate` exits 0: 80 unit tests, 8 integration, 84 repository tests, both scans clean.
+
+## 2026-09-25 (the first live run, and what it found)
+
+The owner approved the live provider gate. The slice had never called the real CLI; everything until now ran against a fake binary in a temp directory. It works, and it was wrong in two ways that only a live run could show.
+
+Setup: `DATA_DIR=/tmp/quack-live`, the built server on port 4317, CLI 2.1.282, model reported as `claude-opus-5-5`.
+
+What worked on the first try. A turn streams as normalized events, `{"type":"session"}` carrying the id and model, then `text`, then `result`. A second turn with `--resume` came back on the same session id and answered a question that could only be answered from the first turn, in a workspace holding no other context, so continuity is real and not a coincidence. The agent ran in `/tmp/quack-live/workspace`, not in the repository. The browser UI worked too, and the strongest evidence there is unplanned: the owner was using the dashboard themselves while this was being tested, in a session of their own, which is why the transcript on screen was not the one being driven from here.
+
+**Defect one: the agent could talk but could not act.** Asked to create a file, it emitted a `tool` event for Write and then reported the write refused. Cause: with `--print` the CLI's `--permission-prompts` defaults to `none`, so anything that would prompt is denied outright, and there is no terminal to answer a prompt anyway. Fixed by sending `--permission-mode acceptEdits`, which the owner chose from four options: edits proceed inside the workspace, and nothing may run a command.
+
+**Defect two: a dashboard turn inherited the owner's own authority.** Unprompted, the agent's first reply listed the owner's personal skills and their connected Gmail, Calendar, Drive and Blotato tools. The workspace was isolated; the configuration and the account were not. The owner chose to fix it rather than defer it.
+
+Two false starts on that fix, both worth keeping because each looked like a solution.
+
+`CLAUDE_CONFIG_DIR` pointed at a scratch directory does isolate the configuration completely, and that is the problem: it isolates the credentials too. The turn answered `Not logged in, please run /login`. Full config isolation ships a product that cannot authenticate.
+
+`--restricted` looked like the answer next, and a direct run of it reported no connectors at all. That measurement was confounded twice over. It was run from inside a Claude Code session, so the child inherited `CLAUDECODE` and the rest, and a nested child does not load connectors the same way; and the instrument itself was the model's own account of its tools, which contradicted itself between two runs of the same prompt.
+
+The reliable instrument is the CLI's own `system/init` event, which lists the tools and MCP servers the turn actually has. Read that way, with the environment scrubbed: `--restricted` removes Bash and the MCP servers that come from configuration files, chrome-devtools and playwright among them, but leaves every connector attached to the signed-in account. A restricted turn still held 114 tools including Gmail, Drive, Calendar and Blotato, because those arrive with the account rather than with a config file, which is also why no amount of config isolation reaches them. `--tools` does not touch them either: an allowlist of six built-in tools still left 93 MCP tools in place, because that flag governs only the built-in set. `--disallowedTools mcp__*` is what removes them, taking the same turn from 114 tools to 21 with Read and Write intact and Bash absent.
+
+So the posture the adapter now sends is `--permission-mode acceptEdits --restricted --disallowedTools mcp__*`, and restricted is the default rather than an opt-in, on the argument that a turn should have to be given authority rather than inherit it.
+
+One more leak fixed while in there, found by the test rather than by the live run: the spawn inherited the whole environment, so a dashboard started from inside a Claude Code session handed the child its parent's session id and messaging token. The child environment now drops `CLAUDECODE`, `AI_AGENT` and every `CLAUDE_CODE_` variable. The test asserted eight such variables reaching the child before the fix.
+
+Verified live through the server after the fix, on a second instance on port 4318 so the owner's own session was left alone: the file was written, and the agent reported no Gmail, Drive, Calendar or Blotato tools and no shell.
+
+Evidence: the three new guards were each mutation-checked, and each break failed exactly its own test and nothing else. `npm run validate` exits 0, all eleven checks, 87 unit tests, 8 integration, 84 repository tests, branch coverage 81.63 percent against the 80 percent floor, both scans clean over 56 commits.
+
+Two smaller things worth not rediscovering. `nvm use` with no argument fails in a directory with no `.nvmrc`, and chained with `&&` that silently skips the command after it, which looked for a while like the CLI producing no output. And the source-protection scan rejects a literal home-directory path anywhere in the tree, including inside a test fixture, so the fake HOME in the new test is assembled from parts.
+
+Where to resume: `plan.md`, "Next steps (resume here)". The slice is now live-verified and the next increment is persistence, so a restart stops losing the conversation.

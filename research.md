@@ -92,6 +92,19 @@ Lint and format on variant A: ESLint 10.11.0, `@eslint/js` 10.0.1, typescript-es
 - Claude Code flags, structured stream formats, permission prompt handling, config-directory isolation, attachment support and transcript layout have not been verified yet. Task 010 step 0 records them here from the official documentation and `claude --help` on the installed version before any adapter code is written.
 - Whether headless Claude Code can bridge permission prompts is the highest risk item. If it cannot, the adapter reports questions as unsupported and the tmux compatibility mode is the fallback.
 
+## Verified provider behaviour (CLI 2.1.282, live, 2026-09-25)
+
+Measured by running the real binary, not read from documentation. The reliable instrument is the CLI's own `system/init` event under `--output-format stream-json --verbose`, which lists the tools and MCP servers a turn actually holds. Do not ask the model what tools it has: asked the same question twice it gave contradictory answers, once denying connectors it demonstrably held.
+
+- **`--print` denies anything that would prompt.** `--permission-prompts` defaults to `none` there, so with no permission mode the agent announces a tool and then reports the action refused. A headless turn therefore cannot write a file unless told otherwise. `--permission-mode acceptEdits` allows edits in the working directory; the accepted modes are `acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk` and `plan`.
+- **`CLAUDE_CONFIG_DIR` isolates the credentials along with everything else.** Pointed at an empty scratch directory the turn answers `Not logged in, please run /login`. It is therefore not usable as a config-isolation mechanism while the product depends on the owner's subscription. This answers the "config-directory isolation" unknown above.
+- **`--restricted` does not remove the signed-in account's connectors.** It removes the tools that run commands or code, and the MCP servers that come from configuration files: with it, chrome-devtools and playwright (both `"source":"user"`) disappear and `Bash` is absent. Every connector with `"source":"claudeai"` survives. A restricted turn still held 114 tools including the owner's Gmail, Google Drive, Google Calendar and Blotato. Those arrive with the account, not with a config file, which is why no config isolation reaches them.
+- **`--tools` governs only the built-in set.** An allowlist of six built-in tools still left 93 `mcp__*` tools in place. It is not a way to exclude connectors.
+- **`--disallowedTools mcp__*` is what removes them.** The same turn went from 114 tools to 21, with `Read` and `Write` intact and `Bash` absent. This is the flag the adapter relies on.
+- **A plain `spawn` leaks the parent's session.** A dashboard started from inside a Claude Code session passed the child `CLAUDECODE`, `AI_AGENT` and six `CLAUDE_CODE_` variables including the session id and the messaging token. A child holding those is a participant in a conversation it knows nothing about, and it also changes how connectors load, which confounded an earlier measurement. The adapter strips them.
+- **The posture the adapter sends** is therefore `--print <prompt> --output-format stream-json --verbose --permission-mode acceptEdits --restricted --disallowedTools mcp__*`, with restricted the default rather than an opt-in, plus `--resume <id>` on later turns. Sessions resume correctly: a second turn answered from the first turn's context in a workspace holding nothing else.
+- **Still unverified:** attachments, transcript layout on disk, and bridging a real permission prompt to a browser (`--permission-prompts host` with `--input-format stream-json`), which remains the route to per-tool approval if that is wanted later.
+
 ## PRD defects noted
 
 - Section 9.2 numbers items 16 to 20 twice. Cosmetic.
@@ -118,6 +131,8 @@ Each of these cost time in this project. Apply them from the start.
 - Commit before mutation-testing. A stray `git checkout <file>` after a mutation silently discarded an uncommitted fix. Restore from a backup copy, or commit first.
 - Run lint, type-check, format check and the tests before every commit, chained. One commit went in with lint failing.
 - Inside a quoted heredoc, write a single backslash for a newline escape in Python. A doubled backslash writes a literal backslash and n into the file. A repository test now fails if a memory file contains one.
+- `nvm use` with no argument fails in a directory that has no `.nvmrc`. Chained with `&&` it silently skips everything after it, which for a while looked like the CLI producing no output at all. Use `nvm use 24.21.0` when the working directory is outside the repository.
+- The source-protection scan rejects a literal home-directory path anywhere in the tree, test fixtures included. A fake `HOME` in a test must be assembled from parts, the same rule the email fixtures already follow.
 - A green CI tick is evidence only for the commit it ran on. Compare the run's `headSha` with the pull request head, and read what the scanner actually scanned.
 - Read the whole issue, reproduce it, and test the suggested fix before adopting it. The suggested fix for issue 10 would not have worked.
 - CI runs two workflows. `secrets-and-source-protection` runs the repository tests and the three scans; `validate` runs `npm ci`, format check, lint, type-check, unit tests with coverage, the builds, the integration project and the browser smoke test, in a `validate` job and an `e2e` job. Coverage and Playwright artifacts are retained and upload even when the run fails. Landed 2026-09-25.
@@ -148,6 +163,9 @@ Recheck before each adapter. All are listed in PRD section 16.
 - Cloudflare Access self hosted app: https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/
 
 ## Failed approaches
+
+- 2026-09-25: Isolating the dashboard's Claude configuration with `CLAUDE_CONFIG_DIR`. It works, completely, including the authentication, so the turn came back `Not logged in`. The credentials live with the configuration, so there is no version of this that keeps the product working while starting from an empty config directory.
+- 2026-09-25: Believing `--restricted` had removed the owner's connectors. A direct run of it reported none, and the finding was wrong twice over. The run happened inside a Claude Code session, so the child inherited `CLAUDECODE` and the rest, and a nested child does not load connectors the same way; and the evidence was the model's own account of its tools, which contradicted itself between two runs of the same prompt. The `system/init` event showed 114 tools including Gmail and Drive. Two lessons: scrub the environment before measuring anything about a child CLI, and never use the model's self-report as an instrument when the protocol states the fact directly.
 
 - 2026-09-24: Stacked pull requests. This file once claimed that a child pull request follows its parent to `main` on its own. It does not: GitHub retargets only when the base branch is deleted. After #1 merged without its branch being deleted, #2 still pointed at the old parent and had to be retargeted by hand, and merging it as it stood would have looked merged while never reaching `main`. The correct procedure is in Environment notes. Prefer independent branches off `main`, and reserve stacking for work that genuinely depends on an unmerged parent.
 

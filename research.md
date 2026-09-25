@@ -113,7 +113,9 @@ Each of these cost time in this project. Apply them from the start.
 
 ## Follow-ups and known gaps
 
-- **Branch protection is unavailable** on this private repository's plan (the API refuses with HTTP 403 and asks for a paid plan or a public repository). TASK_003 criterion 6, "CI blocks merging when any required check fails", therefore cannot be enforced by GitHub. Owner decision needed: make the repository public, upgrade the plan, or use a local pre-push hook.
+- **Branch protection: decided 2026-09-25.** Classic branch protection refused with HTTP 403 on the old private plan. The owner's answer was to make the repository **public**, specifically so that required status checks become available. No longer an open question.
+  - Use the **repository rulesets** endpoint, not classic protection: `repos/{owner}/{repo}/rulesets` answers `200` on this repository while `branches/main/protection` still answers `403`.
+  - The ruleset is deliberately **not created yet**. A ruleset that requires a check a branch's workflows do not produce blocks that branch from merging at all, so it must wait until the open pull requests have landed. Until then, TASK_003 criterion 6 and test requirement 1 are **unmet**, and their PRD boxes stay unticked.
 - **CI hardening, deferred to TASK_003:** pin the first-party actions (`actions/checkout`, `actions/setup-node`) to commit SHAs, run `npm ci`, type-check, lint, Vitest and the builds in CI, and confirm the Linux runner loads better-sqlite3 from its prebuilt binary. Full-tree and full-history secret scanning is done (issue 3).
 - **Scanner rule gaps:** the email and home-directory gaps are fixed (issues 4 and 5). One remains: `package-lock.json` is excluded from the scanner by exact path at the repository root only (issue 6). Fix it with a test first, and never loosen a rule to make a build pass.
 - **Tests built from fragments:** the scanner tests assemble their fixtures from string fragments so the test source does not match its own rules. Keep that pattern.

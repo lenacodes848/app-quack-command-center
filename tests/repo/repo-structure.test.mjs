@@ -92,6 +92,10 @@ test('research.md records environment notes and known follow-ups', () => {
   const text = read('research.md');
   assert.match(text, /^## Environment notes$/m);
   assert.match(text, /^## Follow-ups and known gaps$/m);
+  // The phrase is kept on purpose. research.md no longer poses branch
+  // protection as an open question, it records the decision — but the topic
+  // itself still has to be findable here, because the ruleset is not created
+  // yet and the reason why is written down in that entry.
   assert.match(text, /branch protection/i);
   assert.match(text, /nvm use/);
 });
@@ -115,10 +119,15 @@ test('plan.md tells a returning session where to resume', () => {
   const current = text.match(/^Current task:\s*(TASK_\d{3})\s*$/m)?.[1];
   assert.ok(current, 'plan.md has no current task');
   assert.ok(section.includes(current), `the resume section must mention ${current}`);
+  // Pin the durable property, not one question's wording. An earlier version of
+  // this test asserted the resume section still mentioned "branch protection",
+  // which pinned an OPEN question — so answering it would have turned the test
+  // red. A resume section has to carry decisions and their dates; which
+  // decisions those are changes every time one is made.
   assert.match(
     section,
-    /branch protection/i,
-    'the open owner decision must be in the resume section',
+    /Decided \d{4}-\d{2}-\d{2}/,
+    'the resume section must record decisions with the date they were made',
   );
 });
 

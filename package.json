@@ -20,14 +20,20 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run",
+    "//test": "Unit project only, so it stays fast. Integration and browser tests run in test:integration and test:e2e, and npm run validate runs everything.",
+    "test": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:coverage": "vitest run --project unit --coverage",
     "test:repo": "node --test \"tests/repo/*.test.mjs\"",
+    "test:e2e": "playwright test",
     "scan:source": "node scripts/source-protection-scan.mjs",
     "scan:secrets": "gitleaks dir . --no-banner --redact",
-    "scan:secrets:history": "node scripts/scan-history.mjs"
+    "scan:secrets:history": "node scripts/scan-history.mjs",
+    "validate": "npm run format:check && npm run typecheck && npm run lint && npm run test:repo && npm run test:coverage && npm run test:integration && npm run build && npm run test:e2e && npm run scan:source && npm run scan:secrets && npm run scan:secrets:history"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
     "@types/node": "24.13.6",
     "@vitest/coverage-v8": "4.1.11",
     "eslint": "10.11.0",

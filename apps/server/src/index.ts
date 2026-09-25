@@ -36,6 +36,21 @@ export function start(env: ServerEnv): ReturnType<typeof createServer> {
     createApp({ workspaceDir: workspace, webDir: builtWebDir(), runTurn: undefined }),
   );
 
+  // Without this, a port clash surfaces as an unhandled 'error' event and a
+  // raw Node stack trace, which says nothing useful to someone who simply has
+  // the dashboard already running in another terminal.
+  server.on('error', (failure: NodeJS.ErrnoException) => {
+    if (failure.code === 'EADDRINUSE') {
+      console.error(
+        `Port ${String(env.PORT)} is already in use. ${PRODUCT_NAME} may already be running — stop it, or set PORT to a free port.`,
+      );
+    } else {
+      console.error(`${PRODUCT_NAME} could not start: ${failure.message}`);
+    }
+    process.exitCode = 1;
+    server.close();
+  });
+
   server.listen(env.PORT, env.HOST, () => {
     console.log(`${PRODUCT_NAME} on http://${env.HOST}:${String(env.PORT)}`);
     console.log(`Agent workspace: ${workspace}`);

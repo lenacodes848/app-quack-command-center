@@ -12,3 +12,4 @@ test-results
 data/
 .source-protection-denylist
 *.tsbuildinfo
+.superpowers/

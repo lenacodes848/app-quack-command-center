@@ -241,3 +241,69 @@ describe('resolveStaticPath', () => {
     expect(resolveStaticPath('/srv/web', '/%zz')).toBeUndefined();
   });
 });
+
+describe('when a turn fails mid-stream', () => {
+  test('reports the failure as an event instead of truncating the response', async () => {
+    // The client has already received a 200 and some events by the time this
+    // happens, so the only way to tell it something went wrong is in-band.
+    const run: TurnRunner = async function* run() {
+      yield { type: 'text', text: 'partial' };
+      await Promise.resolve();
+      throw new Error('the provider died');
+    };
+    const base = await serve(createApp({ workspaceDir: scratch(), runTurn: run }));
+
+    const response = await fetch(`${base}/api/turn`, {
+      method: 'POST',
+      body: JSON.stringify({ text: 'hi' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await readNdjson(response)).toEqual([
+      { type: 'text', text: 'partial' },
+      { type: 'error', message: 'the provider died' },
+    ]);
+  });
+
+  test('a non-Error thrown mid-stream still produces a usable message', async () => {
+    /* eslint-disable require-yield, @typescript-eslint/only-throw-error --
+       The thing under test IS a generator that throws a non-Error before
+       yielding anything. Both rules are right in general and describe exactly
+       the fixture this test needs. */
+    const run: TurnRunner = async function* run() {
+      await Promise.resolve();
+      throw 'just a string';
+    };
+    /* eslint-enable require-yield, @typescript-eslint/only-throw-error */
+    const base = await serve(createApp({ workspaceDir: scratch(), runTurn: run }));
+    const response = await fetch(`${base}/api/turn`, {
+      method: 'POST',
+      body: JSON.stringify({ text: 'hi' }),
+    });
+    expect(await readNdjson(response)).toEqual([{ type: 'error', message: 'The turn failed.' }]);
+  });
+
+  test('the slot is released after a mid-stream failure, not left stuck busy', async () => {
+    let calls = 0;
+    const run: TurnRunner = async function* run() {
+      calls += 1;
+      await Promise.resolve();
+      if (calls === 1) throw new Error('boom');
+      yield { type: 'result', text: 'recovered', isError: false };
+    };
+    const base = await serve(createApp({ workspaceDir: scratch(), runTurn: run }));
+
+    await (
+      await fetch(`${base}/api/turn`, { method: 'POST', body: JSON.stringify({ text: 'a' }) })
+    ).text();
+    const second = await fetch(`${base}/api/turn`, {
+      method: 'POST',
+      body: JSON.stringify({ text: 'b' }),
+    });
+
+    expect(second.status).toBe(200);
+    expect(await readNdjson(second)).toEqual([
+      { type: 'result', text: 'recovered', isError: false },
+    ]);
+  });
+});

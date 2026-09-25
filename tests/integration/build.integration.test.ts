@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -65,13 +65,46 @@ describe('server build', () => {
     expect(output).toMatch(/DATA_DIR is required/);
   });
 
-  test('starts on loopback with a valid environment', () => {
-    const out = execFileSync('node', ['apps/server/dist/index.js'], {
+  test('starts on loopback with a valid environment', async () => {
+    // The built server now LISTENS rather than printing a line and exiting, so
+    // this cannot use execFileSync: it would block until the server was killed.
+    // Spawn it, wait for the startup line, then shut it down.
+    const dataDir = mkdtempSync(join(tmpdir(), 'quack-integration-'));
+    const child = spawn('node', ['apps/server/dist/index.js'], {
       cwd: root,
-      env: { ...nodeEnv, DATA_DIR: '/tmp/quack-integration' },
-      encoding: 'utf8',
+      env: { ...nodeEnv, DATA_DIR: dataDir, PORT: '45872' },
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
-    expect(out).toContain('http://127.0.0.1:4317');
+
+    try {
+      const line = await new Promise<string>((resolve, reject) => {
+        let seen = '';
+        const timer = setTimeout(() => {
+          reject(new Error(`server never announced itself; saw: ${seen}`));
+        }, 15_000);
+        child.stderr.setEncoding('utf8');
+        child.stderr.on('data', (chunk: string) => {
+          seen += chunk;
+        });
+        child.stdout.setEncoding('utf8');
+        child.stdout.on('data', (chunk: string) => {
+          seen += chunk;
+          if (seen.includes('http://127.0.0.1:45872')) {
+            clearTimeout(timer);
+            resolve(seen);
+          }
+        });
+        child.once('error', reject);
+        child.once('exit', (code) => {
+          clearTimeout(timer);
+          reject(new Error(`server exited early with ${String(code)}; saw: ${seen}`));
+        });
+      });
+      expect(line).toContain('http://127.0.0.1:45872');
+    } finally {
+      child.kill('SIGKILL');
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });
 

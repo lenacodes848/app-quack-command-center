@@ -27,7 +27,7 @@ The PRD pins were observed on 2026-07-28. The npm registry on 2026-09-24 reports
 | Zod | 4.4.3 | 4.6.5 | Use the PRD pin (verified together, see spike below) |
 | Tailwind CSS | 4.3.3 | 4.3.3 | Matches |
 | Vitest | 4.1.10 | 5.0.1 | New major. Using 4.1.11, the patched release of the 4.1 line (4.1.10 has an advisory), see decisions below |
-| Playwright | 1.62.0 | 1.63.0 | Use the PRD pin (verified together, see spike below) |
+| Playwright | 1.62.0 | 1.63.0 | **Deviation: using 1.63.0.** 1.62.0 cannot load this repository's tsconfig (see below) |
 | better-sqlite3 | 13.0.1 | 13.0.3 | Use the PRD pin 13.0.1 (loads, FTS5, backup verified). 13.0.3 also verified |
 
 Rule: exact versions in the lockfile, and any choice that differs from the PRD pin is recorded here with the reason.
@@ -52,6 +52,14 @@ Lint and format on variant A: ESLint 10.11.0, `@eslint/js` 10.0.1, typescript-es
 - **TypeScript stays on 6.0.2.** typescript-eslint 8.70.1 declares `typescript >=4.8.4 <6.1.0`, so TypeScript 7 would leave the required lint stack unsupported, even though the toy project compiled. Revisit when typescript-eslint supports 7.
 - **Vitest stays on the 4.1 line, at 4.1.11 (a deviation from the PRD pin 4.1.10).** `npm audit` on the real repository reported a moderate advisory (path traversal or arbitrary file read through `@vitest/mocker`, GHSA-82fw-gwwq-j7x9) affecting Vitest and `@vitest/coverage-v8` up to 4.1.10. 4.1.11 fixes it and `npm audit` reports 0 vulnerabilities after the bump. Vitest 5.0.1 also passed the toy project, but nothing needs it. Upgrade to 5 deliberately later.
 - Variant B passing means the newer minors are a low-risk future upgrade. It is not a reason to deviate now.
+- **Playwright is 1.63.0, a deviation from the PRD pin 1.62.0 (decided 2026-09-25, on evidence).** The pin was originally 1.63.0 by accident. A review caught the mismatch between the lockfile and this table, so 1.62.0 was installed to correct it — and it does not work here. `npx playwright test` fails before running anything:
+
+  ```
+  Error: Failed to load tsconfig file at ./tsconfig.json:
+  Failed to resolve "references" path "packages/contracts"
+  ```
+
+  1.62.0's tsconfig loader cannot follow this repository's project references, which exist because the monorepo is built with `tsc -b`. 1.63.0 loads the same file and the smoke test passes in 3.3s. The toy project in variant A never hit this because it had no project references. Deviating deliberately, with the evidence, rather than pinning back to a version that cannot run.
 
 **Native module and npm 11 install scripts.** npm 11.19 reports better-sqlite3's `node-gyp rebuild` install script as "not yet covered by allowScripts" and does not run it. The module still loads because the package ships prebuilt binaries for darwin arm64 and x64, linux x64 and arm64 (glibc and musl) and win32, and no compile is needed. Keep the script unapproved: it is unnecessary and install scripts run arbitrary code. Task 003 must confirm the Linux CI runner loads the module the same way.
 
@@ -74,7 +82,10 @@ Lint and format on variant A: ESLint 10.11.0, `@eslint/js` 10.0.1, typescript-es
 - Working directories are restricted to configured roots, resolved through symlinks. Roots are changed locally only, and no API route edits them.
 - Device pairing design: not yet written. It is written here and approved by the owner before TASK_013 starts. The planned shape is a single use, short lived pairing code written to a file with owner-only permissions at startup, exchanged for an HTTP only, secure, same site, expiring and revocable cookie backed by an `app_sessions` table.
 - Secret scanning: CI installs a pinned gitleaks (version and SHA-256 in `.github/workflows/secrets.yml`, checksum taken from the official release and matched against a separate download, and the version must equal the one recorded above) and runs `npm run scan:secrets` (full working tree) and `npm run scan:secrets:history` (full history) with the same scripts a developer runs. The history script fails when gitleaks reports zero commits scanned. The workflow token is read only (`contents: read`). The `gitleaks/gitleaks-action` action is not used, see Failed approaches.
-- Source protection: `scripts/source-protection-scan.mjs` fails on absolute macOS or Linux home directory paths that include a user name (with or without a trailing slash), on email addresses other than the reserved example domains and the SSH remote form (user `git` at a host), and on any entry in the local, gitignored `.source-protection-denylist`. Tilde paths such as `~/Downloads/1-git` are deliberately allowed because they name no user, so the worksheet can name the projects directory. It prints file, line and rule, never the matched text.
+- Source protection: `scripts/source-protection-scan.mjs` fails on absolute macOS or Linux home directory paths that include a user name (with or without a trailing slash), on email addresses other than the reserved example domains, GitHub's noreply forms and the SSH remote form (user `git` at a host), and on any entry in the local, gitignored `.source-protection-denylist`. Tilde paths such as `~/Downloads/1-git` are deliberately allowed because they name no user, so the worksheet can name the projects directory. It prints file, line and rule, never the matched text.
+- Source protection also scans **commit metadata** — author and committer name and email — not only file content. Added 2026-09-25 after the repository was made public with a personal name and address sitting in the author field of 30 of 36 commits while every check was green.
+  - **Scope is `HEAD`, not `--all`.** `--all` walks every ref in a checkout, so a stale local branch or a leftover `refs/remotes/pr/*` fails the scan with a finding unrelated to the code under review — and since the scanner prints no matched text by design, that finding is near-undiagnosable. Findings name the ref alongside the commit. Override with `SOURCE_PROTECTION_REF`.
+  - **Policy consequence of being public (recorded 2026-09-25).** The identity rule applies to whatever history is scanned, so an outside contributor whose commits carry an ordinary personal address will fail `scan:source` on their own pull request. That is intended for a single-owner project, and it is written down here rather than left to be discovered: this repository is public to get required status checks, not to invite contributions. If that ever changes, the rule has to be scoped to the owner's own commits instead of dropped.
 
 ## Known provider limitations and unknowns
 
@@ -91,14 +102,33 @@ Lint and format on variant A: ESLint 10.11.0, `@eslint/js` 10.0.1, typescript-es
 
 - Always run `nvm use` in this repository. The machine default is Node 22, the project needs Node 24.
 - `.source-protection-denylist` is gitignored and exists only on this machine. It holds the owner's name. To recreate it, copy `.source-protection-denylist.example` to that name and add the owner's name and any private identifiers, one per line. Never commit it.
-- `gh` is authenticated and pushing over HTTPS works. The repository is private, default branch `main`, work goes through pull requests, and stacked pull requests retarget automatically when the parent merges.
+- `gh` is authenticated and pushing over HTTPS works. The repository is private, default branch `main`, and work goes through pull requests, one independent branch off `main` per pull request. Stacked pull requests do not retarget automatically when the parent merges: GitHub only retargets when the base branch is deleted. After merging a parent, either delete its branch or run `gh pr edit <child> --base main`, then confirm with `gh pr view <child> --json baseRefName` before merging the child.
 - Not installed: Codex CLI, Hermes, `cloudflared`, Playwright browsers.
 - The original starter-kit folder in the owner's Downloads folder is reference only. Everything needed is in this repository.
 - Node 24's test runner needs a quoted glob: `node --test "tests/repo/*.test.mjs"`.
 
+## Shell and workflow pitfalls
+
+Each of these cost time in this project. Apply them from the start.
+
+- The shell is zsh, which does not word-split unquoted variables. A `for x in $LIST` loop sees one item. Use explicit lists or `${=LIST}`.
+- macOS has no `timeout` command. To put a time limit on something, use `perl -e 'alarm 60; exec @ARGV' <command>`.
+- Git operations that need authentication over HTTPS (`git push`, `git fetch --prune`, `git ls-remote`) can hang indefinitely here, and stuck `git-remote-https` processes pile up. `gh` keeps working throughout. The configured credential helper is `osxkeychain`, which is the probable cause (a stalled keychain prompt). Workaround that does not modify any git config: `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push -u origin <branch>`, with `GIT_TERMINAL_PROMPT=0` and a perl alarm. Kill leftovers with `pkill -f "git-remote-https origin"`. For listing and deleting remote branches skip git entirely: `gh api repos/{owner}/{repo}/branches` to list, `gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/<branch>` to delete, and `git update-ref -d refs/remotes/origin/<branch>` to clear a stale tracking ref.
+- Chain a multi-step edit, the checks and the commit with `&&` (or `set -e`). A script that fails partway must not be followed by a commit. Twice a failed edit script was followed by a commit and push anyway.
+- Commit before mutation-testing. A stray `git checkout <file>` after a mutation silently discarded an uncommitted fix. Restore from a backup copy, or commit first.
+- Run lint, type-check, format check and the tests before every commit, chained. One commit went in with lint failing.
+- Inside a quoted heredoc, write a single backslash for a newline escape in Python. A doubled backslash writes a literal backslash and n into the file. A repository test now fails if a memory file contains one.
+- A green CI tick is evidence only for the commit it ran on. Compare the run's `headSha` with the pull request head, and read what the scanner actually scanned.
+- Read the whole issue, reproduce it, and test the suggested fix before adopting it. The suggested fix for issue 10 would not have worked.
+- CI runs two workflows. `secrets-and-source-protection` runs the repository tests and the three scans; `validate` runs `npm ci`, format check, lint, type-check, unit tests with coverage, the builds, the integration project and the browser smoke test, in a `validate` job and an `e2e` job. Coverage and Playwright artifacts are retained and upload even when the run fails. Landed 2026-09-25.
+- `npm run test:repo` deliberately runs in the secrets workflow only. Some of its tests shell out to gitleaks, which only that workflow installs, so running it in `validate` too would fail on a missing binary.
+- **What CI still does not enforce:** merging. No branch-protection ruleset exists yet, so a red check does not block a merge. TASK_003 acceptance criterion 6 and test requirement 1 remain unmet for that reason, and the ruleset waits until the open pull requests have landed — one requiring the `validate` and `e2e` checks would block any branch whose workflows do not produce them.
+
 ## Follow-ups and known gaps
 
-- **Branch protection is unavailable** on this private repository's plan (the API refuses with HTTP 403 and asks for a paid plan or a public repository). TASK_003 criterion 6, "CI blocks merging when any required check fails", therefore cannot be enforced by GitHub. Owner decision needed: make the repository public, upgrade the plan, or use a local pre-push hook.
+- **Branch protection: decided 2026-09-25.** Classic branch protection refused with HTTP 403 on the old private plan. The owner's answer was to make the repository **public**, specifically so that required status checks become available. No longer an open question.
+  - Use the **repository rulesets** endpoint, not classic protection: `repos/{owner}/{repo}/rulesets` answers `200` on this repository while `branches/main/protection` still answers `403`.
+  - The ruleset is deliberately **not created yet**. A ruleset that requires a check a branch's workflows do not produce blocks that branch from merging at all, so it must wait until the open pull requests have landed. Until then, TASK_003 criterion 6 and test requirement 1 are **unmet**, and their PRD boxes stay unticked.
 - **CI hardening, deferred to TASK_003:** pin the first-party actions (`actions/checkout`, `actions/setup-node`) to commit SHAs, run `npm ci`, type-check, lint, Vitest and the builds in CI, and confirm the Linux runner loads better-sqlite3 from its prebuilt binary. Full-tree and full-history secret scanning is done (issue 3).
 - **Scanner rule gaps:** the email and home-directory gaps are fixed (issues 4 and 5). One remains: `package-lock.json` is excluded from the scanner by exact path at the repository root only (issue 6). Fix it with a test first, and never loosen a rule to make a build pass.
 - **Tests built from fragments:** the scanner tests assemble their fixtures from string fragments so the test source does not match its own rules. Keep that pattern.
@@ -118,6 +148,8 @@ Recheck before each adapter. All are listed in PRD section 16.
 - Cloudflare Access self hosted app: https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/
 
 ## Failed approaches
+
+- 2026-09-24: Stacked pull requests. This file once claimed that a child pull request follows its parent to `main` on its own. It does not: GitHub retargets only when the base branch is deleted. After #1 merged without its branch being deleted, #2 still pointed at the old parent and had to be retargeted by hand, and merging it as it stood would have looked merged while never reaching `main`. The correct procedure is in Environment notes. Prefer independent branches off `main`, and reserve stacking for work that genuinely depends on an unmerged parent.
 
 - 2026-09-24: `gitleaks/gitleaks-action@v2` reported "No leaks detected" on the pushes to `main` from merging pull requests 2 and 9 while scanning zero commits. On a push it scans `--no-merges --first-parent <before>^..<after>`. After a merge-commit merge the first-parent line contains only merge commits, and `--no-merges` removes them, so the range is empty and gitleaks exits 0. Replaced by a pinned CLI that scans the full tree and full history, and the history script now fails on zero commits scanned. Never trust a scanner's green tick without seeing what it scanned.
 - 2026-09-24: `tsc -b` kept its incremental state in `tsconfig.tsbuildinfo` next to each package's tsconfig, outside `dist`. Deleting `dist` the obvious way left that state behind, `tsc -b` judged every project up to date and emitted nothing, and the web build then failed with a misleading package-resolution error ("Failed to resolve entry for package"). Fix: `tsBuildInfoFile` is `${configDir}/dist/.tsbuildinfo` in `tsconfig.base.json`, so the state and the outputs live and die together, plus `npm run clean` (removes build output and any legacy build-info files). For CI caching in TASK_003: cache each `dist` as a unit, never the build info without its outputs.

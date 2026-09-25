@@ -122,3 +122,34 @@ After the fix, the issue's literal reproduction (`rm -rf` of every `dist`, then 
 Slip recorded as data: the fix commit was made while lint was failing, because my check and my commit were not chained. Typed lint rules were being applied to the plain JavaScript probe fixture, which is not in the ESLint tsconfig. A follow-up commit ignores that fixture directory. Lint, type-check, format, all tests, both repository scans and audit pass.
 
 Second slip recorded as data: the docs script for this pull request wrote a literal backslash and n at the end of this file instead of a newline (an escaped sequence inside a quoted heredoc). It was caught by inspecting the bytes after the push, repaired, and a new repository test now fails if any memory file contains a literal backslash-n. That test was mutation-checked against the same damage.
+
+## 2026-09-25 (wrap-up after the bug-fix pull requests)
+
+Pull requests 17, 18 and 20 were reviewed and merged, and issues 3, 4, 5, 10 and 11 are closed. Nothing labelled `bug` is open.
+
+Post-merge evidence for issue 3, the check promised in the pull request: the push-to-`main` runs after the merges (workflow runs 36092471615 and 36092657738) each verified the gitleaks checksum, scanned the working tree (about 330 KB) and scanned 26 commits of history, all with no leaks. The earlier failure mode, "0 commits scanned" reported as green, is gone.
+
+Health of `main` after the three merges, all run locally: no conflict markers, type-check, lint, format check, 28 Vitest tests, 47 repository tests, source protection scan, gitleaks tree and history (26 commits), `npm audit` with 0 vulnerabilities.
+
+Cleanup done: all seven merged feature branches deleted locally and on the remote (this included the abandoned handoff branch, whose commits were already in `main` through the stacked pull request), stale remote-tracking references cleared, the 369 MB of scratch spike projects removed, and a duplicate copy of the phase plan that I had left in the original starter-kit folder removed after confirming it was identical to the repository copy. The original kit files were not touched. Only `main` exists now. gitleaks and Node 24 stay installed because the project needs them.
+
+Fixed in this wrap-up (issue 16): `research.md` said stacked pull requests retarget automatically. They do not. The correct procedure is now in Environment notes and the mistake is recorded under Failed approaches. New tests pin both, and a resume section in `plan.md` is pinned too.
+
+Where to resume: `plan.md`, section "Next steps (resume here)". In short: ask the owner about branch protection, then write and execute the TASK_003 plan, then TASK_004 and TASK_005. The workflow pitfalls I hit (unchained commands, mutating before committing, literal escapes in scripted edits, hanging git network commands on this machine) are in `research.md` under Shell and workflow pitfalls.
+
+
+## 2026-09-25 (TASK_003, partial: criteria 1 to 5)
+
+Landed in #25: `npm run validate` (eleven checks in one command, `&&`-chained so the first failure stops the run), a second CI workflow `validate.yml` with a `validate` job and an `e2e` job, the Vitest split into `unit` (5s timeout) and `integration` (180s) projects, a Playwright browser smoke test against the built app, 80 percent coverage thresholds, commit-metadata scanning in the source-protection scan, and workflow guards covering every workflow file. Closes #7, #13 and #23.
+
+Evidence, local: `npm run validate` exits 0, all eleven steps, roughly 25 seconds. Coverage measured on the run rather than quoted from an earlier commit: 100 statements, 93.33 branches, 100 functions, 100 lines. `npm run test:repo` 79, unit 22, integration 8 in about 18 seconds, browser smoke 1.
+
+Evidence, CI on `b0dee7d`: `validate` green (run 36168143308), `e2e` green (same run), `scan` green (run 36168143302). Earlier on this branch, the first real CI run failed twice for reasons no local run could show, and both are worth remembering: `lint` ran before `typecheck` so type-aware rules could not resolve `@quack/config` on a clean runner where nothing had been built yet, and `test:repo` ran in the `validate` job where gitleaks is not installed. Both are fixed; the first is the same family as bug #11.
+
+**Not done, and the PRD boxes are left unticked to say so:** acceptance criterion 6 ("CI blocks merging when any required check fails") and test requirement 1 (a deliberately failing fixture proving it). Both need a branch-protection ruleset. It is deferred on purpose: a ruleset requiring the `validate` and `e2e` checks would block any branch whose workflows do not produce them, which at the time of writing included #22. Create it once the open pull requests have landed.
+
+Defects found and fixed while building this, both of which had shipped green: the source-protection scanner used `\x1f` as a field separator on the false belief that git forbids it in an ident, so a crafted author name shifted every field and a commit carrying a real personal address produced zero findings; and the first version of the CI guards matched the whole workflow file rather than each job, so deleting `cache: npm` or the failure-artifact condition from one job still passed because the sibling job matched — two of five mutations caught, now six of six.
+
+Review changed three things on evidence. Playwright stays at 1.63.0 as a deliberate, recorded deviation from the PRD's 1.62.0: pinning back was attempted and 1.62.0 cannot load this repository's tsconfig at all, failing on the project references that exist because the monorepo builds with `tsc -b`. The identity scan now walks `HEAD` rather than `--all`, because scanning every ref made a stale local branch fail the build with an unrelated and, since findings print no matched text, near-undiagnosable finding. And the browser artifact upload is split so the always-written report gets `if-no-files-found: error` while only `test-results` ignores a missing path.
+
+Where to resume: `plan.md`, "Next steps (resume here)". TASK_003 is done bar the ruleset; the next substantive work is TASK_004.

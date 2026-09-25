@@ -162,7 +162,11 @@ test('no workflow contains a credential literal', () => {
 
 test('every action in every workflow is pinned to a commit SHA, not a tag', () => {
   for (const file of workflowFiles()) {
-    for (const [, ref] of read(file).matchAll(/^\s*(?:-\s*)?uses:\s*(\S+)/gm)) {
+    for (const [, rawRef] of read(file).matchAll(/^\s*(?:-\s*)?uses:\s*(\S+)/gm)) {
+      const ref = rawRef.replace(/^['"]|['"]$/g, '');
+      const isPinnable =
+        !ref.startsWith('./') && !ref.startsWith('../') && !ref.startsWith('docker://');
+      if (!isPinnable) continue;
       assert.match(
         ref,
         /@[0-9a-f]{40}$/,

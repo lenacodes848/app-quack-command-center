@@ -91,14 +91,31 @@ Lint and format on variant A: ESLint 10.11.0, `@eslint/js` 10.0.1, typescript-es
 
 - Always run `nvm use` in this repository. The machine default is Node 22, the project needs Node 24.
 - `.source-protection-denylist` is gitignored and exists only on this machine. It holds the owner's name. To recreate it, copy `.source-protection-denylist.example` to that name and add the owner's name and any private identifiers, one per line. Never commit it.
-- `gh` is authenticated and pushing over HTTPS works. The repository is private, default branch `main`, work goes through pull requests, and stacked pull requests retarget automatically when the parent merges.
+- `gh` is authenticated and pushing over HTTPS works. The repository is private, default branch `main`, and work goes through pull requests, one independent branch off `main` per pull request. Stacked pull requests do not retarget automatically when the parent merges: GitHub only retargets when the base branch is deleted. After merging a parent, either delete its branch or run `gh pr edit <child> --base main`, then confirm with `gh pr view <child> --json baseRefName` before merging the child.
 - Not installed: Codex CLI, Hermes, `cloudflared`, Playwright browsers.
 - The original starter-kit folder in the owner's Downloads folder is reference only. Everything needed is in this repository.
 - Node 24's test runner needs a quoted glob: `node --test "tests/repo/*.test.mjs"`.
 
+## Shell and workflow pitfalls
+
+Each of these cost time in this project. Apply them from the start.
+
+- The shell is zsh, which does not word-split unquoted variables. A `for x in $LIST` loop sees one item. Use explicit lists or `${=LIST}`.
+- macOS has no `timeout` command. To put a time limit on something, use `perl -e 'alarm 60; exec @ARGV' <command>`.
+- Git operations that need authentication over HTTPS (`git push`, `git fetch --prune`, `git ls-remote`) can hang indefinitely here, and stuck `git-remote-https` processes pile up. `gh` keeps working throughout. The configured credential helper is `osxkeychain`, which is the probable cause (a stalled keychain prompt). Workaround that does not modify any git config: `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push -u origin <branch>`, with `GIT_TERMINAL_PROMPT=0` and a perl alarm. Kill leftovers with `pkill -f "git-remote-https origin"`. For listing and deleting remote branches skip git entirely: `gh api repos/{owner}/{repo}/branches` to list, `gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/<branch>` to delete, and `git update-ref -d refs/remotes/origin/<branch>` to clear a stale tracking ref.
+- Chain a multi-step edit, the checks and the commit with `&&` (or `set -e`). A script that fails partway must not be followed by a commit. Twice a failed edit script was followed by a commit and push anyway.
+- Commit before mutation-testing. A stray `git checkout <file>` after a mutation silently discarded an uncommitted fix. Restore from a backup copy, or commit first.
+- Run lint, type-check, format check and the tests before every commit, chained. One commit went in with lint failing.
+- Inside a quoted heredoc, write a single backslash for a newline escape in Python. A doubled backslash writes a literal backslash and n into the file. A repository test now fails if a memory file contains one.
+- A green CI tick is evidence only for the commit it ran on. Compare the run's `headSha` with the pull request head, and read what the scanner actually scanned.
+- Read the whole issue, reproduce it, and test the suggested fix before adopting it. The suggested fix for issue 10 would not have worked.
+- Until TASK_003 lands, CI runs only the repository tests and the scans. It does not run `npm ci`, type-check, lint, Vitest or the builds, so toolchain changes are proven locally and in a clean clone, not by CI.
+
 ## Follow-ups and known gaps
 
-- **Branch protection is unavailable** on this private repository's plan (the API refuses with HTTP 403 and asks for a paid plan or a public repository). TASK_003 criterion 6, "CI blocks merging when any required check fails", therefore cannot be enforced by GitHub. Owner decision needed: make the repository public, upgrade the plan, or use a local pre-push hook.
+- **Branch protection: decided 2026-09-25.** Classic branch protection refused with HTTP 403 on the old private plan. The owner's answer was to make the repository **public**, specifically so that required status checks become available. No longer an open question.
+  - Use the **repository rulesets** endpoint, not classic protection: `repos/{owner}/{repo}/rulesets` answers `200` on this repository while `branches/main/protection` still answers `403`.
+  - The ruleset is deliberately **not created yet**. A ruleset that requires a check a branch's workflows do not produce blocks that branch from merging at all, so it must wait until the open pull requests have landed. Until then, TASK_003 criterion 6 and test requirement 1 are **unmet**, and their PRD boxes stay unticked.
 - **CI hardening, deferred to TASK_003:** pin the first-party actions (`actions/checkout`, `actions/setup-node`) to commit SHAs, run `npm ci`, type-check, lint, Vitest and the builds in CI, and confirm the Linux runner loads better-sqlite3 from its prebuilt binary. Full-tree and full-history secret scanning is done (issue 3).
 - **Scanner rule gaps:** the email and home-directory gaps are fixed (issues 4 and 5). One remains: `package-lock.json` is excluded from the scanner by exact path at the repository root only (issue 6). Fix it with a test first, and never loosen a rule to make a build pass.
 - **Tests built from fragments:** the scanner tests assemble their fixtures from string fragments so the test source does not match its own rules. Keep that pattern.
@@ -118,6 +135,8 @@ Recheck before each adapter. All are listed in PRD section 16.
 - Cloudflare Access self hosted app: https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/
 
 ## Failed approaches
+
+- 2026-09-24: Stacked pull requests. This file once claimed that a child pull request follows its parent to `main` on its own. It does not: GitHub retargets only when the base branch is deleted. After #1 merged without its branch being deleted, #2 still pointed at the old parent and had to be retargeted by hand, and merging it as it stood would have looked merged while never reaching `main`. The correct procedure is in Environment notes. Prefer independent branches off `main`, and reserve stacking for work that genuinely depends on an unmerged parent.
 
 - 2026-09-24: `gitleaks/gitleaks-action@v2` reported "No leaks detected" on the pushes to `main` from merging pull requests 2 and 9 while scanning zero commits. On a push it scans `--no-merges --first-parent <before>^..<after>`. After a merge-commit merge the first-parent line contains only merge commits, and `--no-merges` removes them, so the range is empty and gitleaks exits 0. Replaced by a pinned CLI that scans the full tree and full history, and the history script now fails on zero commits scanned. Never trust a scanner's green tick without seeing what it scanned.
 - 2026-09-24: `tsc -b` kept its incremental state in `tsconfig.tsbuildinfo` next to each package's tsconfig, outside `dist`. Deleting `dist` the obvious way left that state behind, `tsc -b` judged every project up to date and emitted nothing, and the web build then failed with a misleading package-resolution error ("Failed to resolve entry for package"). Fix: `tsBuildInfoFile` is `${configDir}/dist/.tsbuildinfo` in `tsconfig.base.json`, so the state and the outputs live and die together, plus `npm run clean` (removes build output and any legacy build-info files). For CI caching in TASK_003: cache each `dist` as a unit, never the build info without its outputs.

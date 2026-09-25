@@ -92,6 +92,10 @@ test('research.md records environment notes and known follow-ups', () => {
   const text = read('research.md');
   assert.match(text, /^## Environment notes$/m);
   assert.match(text, /^## Follow-ups and known gaps$/m);
+  // The phrase is kept on purpose. research.md no longer poses branch
+  // protection as an open question, it records the decision — but the topic
+  // itself still has to be findable here, because the ruleset is not created
+  // yet and the reason why is written down in that entry.
   assert.match(text, /branch protection/i);
   assert.match(text, /nvm use/);
 });
@@ -106,6 +110,36 @@ test('memory files contain no stray literal backslash-n from a scripted edit', (
   for (const f of ['discovery.md', 'research.md', 'plan.md', 'progress.md']) {
     assert.doesNotMatch(read(f), /\\n/, `${f} contains a literal backslash-n sequence`);
   }
+});
+
+test('plan.md tells a returning session where to resume', () => {
+  const text = read('plan.md');
+  assert.match(text, /^## Next steps \(resume here\)$/m);
+  const section = text.split(/^## Next steps \(resume here\)$/m)[1]?.split(/^## /m)[0] ?? '';
+  const current = text.match(/^Current task:\s*(TASK_\d{3})\s*$/m)?.[1];
+  assert.ok(current, 'plan.md has no current task');
+  assert.ok(section.includes(current), `the resume section must mention ${current}`);
+  // Pin the durable property, not one question's wording. An earlier version of
+  // this test asserted the resume section still mentioned "branch protection",
+  // which pinned an OPEN question — so answering it would have turned the test
+  // red. A resume section has to carry decisions and their dates; which
+  // decisions those are changes every time one is made.
+  assert.match(
+    section,
+    /Decided \d{4}-\d{2}-\d{2}/,
+    'the resume section must record decisions with the date they were made',
+  );
+});
+
+test('research.md does not claim stacked pull requests retarget automatically', () => {
+  const text = read('research.md');
+  assert.doesNotMatch(text, /(?<!not )retarget automatically/i, 'the false positive claim is back');
+  assert.match(text, /gh pr edit <child> --base main/, 'the correct remedy must be written down');
+  assert.match(
+    text.split(/^## Failed approaches$/m)[1] ?? '',
+    /stacked pull request/i,
+    'the mistake must also be recorded under Failed approaches',
+  );
 });
 
 test('progress.md has a dated entry', () => {

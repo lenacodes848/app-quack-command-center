@@ -183,6 +183,14 @@ test('local-only files are gitignored', () => {
   }
 });
 
+function timeoutForProject(config, projectName) {
+  const nameIndex = config.search(new RegExp(`name:\\s*'${projectName}'`));
+  assert.ok(nameIndex >= 0, `a project named ${projectName} must exist`);
+  const match = config.slice(nameIndex).match(/testTimeout:\s*([\d_]+)/);
+  assert.ok(match, `testTimeout must be set for the ${projectName} project`);
+  return Number(match[1].replace(/_/g, ''));
+}
+
 test('unit and integration tests are separate Vitest projects with separate timeouts', () => {
   const config = read('vitest.config.ts');
   assert.match(config, /name:\s*'unit'/, 'a project named unit must exist');
@@ -195,6 +203,22 @@ test('unit and integration tests are separate Vitest projects with separate time
     scripts['test:coverage'],
     /--coverage/,
     'test:coverage must actually collect coverage',
+  );
+
+  const unitTimeout = timeoutForProject(config, 'unit');
+  const integrationTimeout = timeoutForProject(config, 'integration');
+  assert.ok(
+    unitTimeout <= 10_000,
+    `unit project testTimeout must be at most 10000, found ${unitTimeout}`,
+  );
+  assert.ok(
+    integrationTimeout >= 60_000,
+    `integration project testTimeout must be at least 60000, found ${integrationTimeout}`,
+  );
+  assert.notEqual(
+    unitTimeout,
+    integrationTimeout,
+    'unit and integration testTimeout values must differ',
   );
 });
 

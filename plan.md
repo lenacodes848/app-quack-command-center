@@ -4,9 +4,23 @@ Last updated: 2026-09-25
 
 Full phase plan: `docs/superpowers/plans/2026-09-24-personal-ai-command-center.md`
 
-Active goal: Phase 1 (foundation, TASK_002 to TASK_005). TASK_001 and TASK_002 are done and merged, every issue labelled `bug` is closed, and TASK_003 has landed except for criterion 6, which is gated on a branch-protection ruleset. Next substantive work is TASK_004.
+Active goal: **a working minimum viable product, not the PRD phase order.** See the direction change below. TASK_001 and TASK_002 are merged, every `bug` issue is closed, and TASK_003 landed except criterion 6.
 
 Current task: TASK_003
+
+## Direction change, 2026-09-25 — read before following the task graph
+
+The owner stopped the infrastructure work mid-flight: *"stop fixing linting errors and issues that aren't core to building a functioning product... we are going for the minimal viable product."* They then chose a **thin vertical slice** over the PRD phase order, and **light review** over the subagent review loop: no per-task plan documents, no per-task reviewer subagents, no mutation-checking every guard. Build, run the checks, be honest when something breaks, keep moving.
+
+**The slice lives on branch `feat/mvp-claude-adapter`** (not merged, not pushed as of 2026-09-25). `main` is merged into it and `npm run validate` exits 0.
+
+- `packages/adapter` drives Claude Code non-interactively with `claude --print --output-format stream-json --verbose`, parsing NDJSON into normalized events and resuming by the `session_id` from the init event. **No pseudo-terminal and no process supervisor** — that is what collapses most of the PRD's Phase 2 for the first version.
+- `apps/server` streams a turn to the browser as newline-delimited JSON over a plain `POST /api/turn`. A turn is request-shaped, so a streaming response fits it without a WebSocket dependency. One in-memory session, one turn at a time. Sessions run in `$DATA_DIR/workspace`, never a path a request chooses.
+- `apps/web` is the chat UI: message list, composer, tool chips, streaming text, error states.
+
+**Deliberately absent:** persistence (a restart loses the thread), authentication, multiple sessions, attachments, permission prompts. The PRD's 34-task graph below is background, not the plan of record. Do not restart the ceremony unless the owner asks.
+
+**The immediate next step is to run the slice against the real CLI**, which is an owner gate: it spends the owner's subscription quota and must use a scratch directory, never the owner's own session or configuration. After that, persistence is the natural next increment, because "sessions survive a restart" is the PRD's headline promise and the slice does not have it.
 
 ## Next steps (resume here)
 
@@ -17,9 +31,10 @@ State on 2026-09-25: `main` is the only branch, locally and on the remote, and i
 1. **TASK_003 is mostly done — do not rebuild it.** Acceptance criteria 1 to 5 and test requirements 2 and 3 landed in #25 on 2026-09-25: `npm run validate` (eleven checks, one command), the `validate.yml` workflow with its `validate` and `e2e` jobs, the Vitest unit/integration split, the Playwright smoke test with retained failure artifacts, 80 percent coverage thresholds, commit-metadata scanning and the workflow-wide guards. Issues #7, #13 and #23 are closed by it.
    - **What remains:** criterion 6 ("CI blocks merging when any required check fails") and test requirement 1 (a deliberately failing fixture proving it). Both need a branch-protection ruleset, which is deliberately deferred until the open pull requests have landed, because a ruleset requiring the `validate` and `e2e` checks blocks any branch whose workflows do not produce them. Use the repository-rulesets endpoint, not classic protection. Their PRD boxes stay unticked until then.
    - **Deferred, not forgotten:** issue #24 holds the scanner follow-ups (commit messages unscanned, shallow-clone blindness, two smaller gaps). Still open and not urgent: #14, #12, #15, #6.
-2. **TASK_004, shared contracts and state machines.** The exact names and the proposed transition tables are in the Phase 1 section of `docs/superpowers/plans/2026-09-24-personal-ai-command-center.md`. Table-driven tests must accept every valid transition and reject every other pair.
-3. **TASK_005, SQLite storage.** better-sqlite3 13.0.1 is verified (prebuilt binary, FTS5, WAL, online backup). Do not approve its npm install script. Confirm the Linux CI runner loads it from the prebuilt binary.
-4. **Then Phase 2 onward,** following the phase plan and the task graph below. At the start of each phase write a just-in-time bite-sized TDD plan file. Stop at every owner gate below.
+2. **TASK_004 and TASK_005 are NOT the next work.** See the direction change above. They return once the slice proves itself. Their notes are kept below for when they do: TASK_004's names and transition tables are in the Phase 1 section of `docs/superpowers/plans/2026-09-24-personal-ai-command-center.md`, and TASK_005's better-sqlite3 13.0.1 is verified (prebuilt binary, FTS5, WAL, online backup; do not approve its npm install script).
+3. **Old step, superseded — TASK_004, shared contracts and state machines.** The exact names and the proposed transition tables are in the Phase 1 section of `docs/superpowers/plans/2026-09-24-personal-ai-command-center.md`. Table-driven tests must accept every valid transition and reject every other pair.
+4. **Old step, superseded — TASK_005, SQLite storage.** better-sqlite3 13.0.1 is verified (prebuilt binary, FTS5, WAL, online backup). Do not approve its npm install script. Confirm the Linux CI runner loads it from the prebuilt binary.
+5. **Then Phase 2 onward,** following the phase plan and the task graph below. At the start of each phase write a just-in-time bite-sized TDD plan file. Stop at every owner gate below.
 
 ## Recently completed
 

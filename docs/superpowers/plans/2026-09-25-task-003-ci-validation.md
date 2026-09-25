@@ -145,7 +145,11 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
       reportsDirectory: 'coverage',
-      include: ['packages/*/src/**/*.ts', 'apps/*/src/**/*.ts'],
+      // apps/web is .tsx and has no test infrastructure yet (no jsdom, no React
+      // testing library). TASK_015 builds the real shell and brings its own
+      // tests; adding them here would be scope creep. Named explicitly rather
+      // than left to a .ts glob that excludes .tsx by accident.
+      include: ['packages/*/src/**/*.ts', 'apps/server/src/**/*.ts'],
       exclude: ['**/*.test.ts', '**/dist/**'],
       thresholds: {
         lines: 80,
@@ -401,11 +405,7 @@ test('one command runs the complete local validation', () => {
   assert.ok(scripts.validate, 'a validate script must exist');
   for (const step of VALIDATE_STEPS) {
     assert.ok(scripts[step], `validate refers to ${step}, which must itself be a script`);
-    assert.match(
-      scripts.validate,
-      new RegExp(`\\bnpm run ${step.replace(':', ':')}\\b`),
-      `validate must run ${step}`,
-    );
+    assert.match(scripts.validate, new RegExp(`\\bnpm run ${step}\\b`), `validate must run ${step}`);
   }
 });
 
@@ -843,7 +843,11 @@ test('CI retains coverage and browser failure artifacts', () => {
   assert.match(wf, /coverage/, 'coverage must be retained');
   assert.match(wf, /playwright-report/, 'the browser report must be retained');
   assert.match(wf, /test-results/, 'screenshots, traces and videos must be retained');
-  assert.match(wf, /if:\s*(?:!cancelled\(\)|always\(\))/, 'artifacts must upload even on failure');
+  assert.match(
+    wf,
+    /if:\s*\$\{\{\s*(?:!\s*cancelled\(\)|always\(\))\s*\}\}/,
+    'artifacts must upload even on failure',
+  );
 });
 
 test('the required check names the ruleset depends on do not drift', () => {

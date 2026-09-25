@@ -84,6 +84,55 @@ test('loadDenylist ignores comments and blank lines and tolerates a missing file
   }
 });
 
+function scanText(content, name = 'probe.md') {
+  const dir = fixture({ [name]: content });
+  try {
+    return scanFiles(dir, [name], []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('allows SSH-style git remotes, which are not personal addresses', () => {
+  assert.deepEqual(scanText('clone: git@github.com:owner/repo.git\n'), []);
+  assert.deepEqual(scanText('url: git+ssh://git@github.com/owner/repo.git\n'), []);
+});
+
+test('a package.json repository field with an SSH remote passes the scan', () => {
+  const manifest = JSON.stringify(
+    { name: 'x', repository: { type: 'git', url: 'git+ssh://git@github.com/owner/repo.git' } },
+    null,
+    2,
+  );
+  assert.deepEqual(scanText(`${manifest}\n`, 'package.json'), []);
+});
+
+test('still rejects personal addresses whose local part only resembles git', () => {
+  for (const local of ['mygit', 'git.person', 'digit', 'git2']) {
+    const findings = scanText(`contact ${[local, 'mail.test'].join('@')}\n`);
+    assert.equal(findings[0]?.rule, 'email-address', `${local} should be flagged`);
+  }
+});
+
+test('flags an absolute home directory path with no trailing slash', () => {
+  const home = ['', 'Users', 'someone'].join('/');
+  assert.equal(scanText(`my home is ${home}\n`)[0]?.rule, 'home-directory-path');
+  assert.equal(scanText(`see ${home}.\n`)[0]?.rule, 'home-directory-path');
+  assert.equal(scanText(`path="${home}"\n`)[0]?.rule, 'home-directory-path');
+  const linuxHome = ['', 'home', 'someone'].join('/');
+  assert.equal(scanText(`my home is ${linuxHome}\n`)[0]?.rule, 'home-directory-path');
+});
+
+test('allows tilde paths, which name no user', () => {
+  assert.deepEqual(scanText('projects live in ~/Downloads/1-git\n'), []);
+  assert.deepEqual(scanText('config: ~/.config/tool\n'), []);
+});
+
+test('does not flag a bare home-directory prefix with no user name', () => {
+  assert.deepEqual(scanText(`the ${['', 'Users', ''].join('/')} prefix is macOS\n`), []);
+  assert.deepEqual(scanText(`the ${['', 'home', ''].join('/')} directory\n`), []);
+});
+
 test('every tracked file in this repository passes the source protection scan', () => {
   const out = execFileSync('node', ['scripts/source-protection-scan.mjs'], {
     cwd: root,

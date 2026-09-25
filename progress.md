@@ -76,7 +76,6 @@ The owner decided not to hand the build to another agent, so the handoff pull re
 
 Test first: the three handoff tests were replaced by three tests requiring those sections and forbidding any stale reference to a handoff document. They failed against the old files (3 failures), then passed after the move. `npm run test:repo` is 31 of 31.
 
-
 ## 2026-09-24 (bug fixes from the issue tracker, pull request 3)
 
 ### Build tooling (#10, #11)
@@ -92,4 +91,5 @@ Test first. For #11 the two new rebuild tests failed on the old config (a rebuil
 After the fix, the issue's literal reproduction (`rm -rf` of every `dist`, then `npm test`) passes 28 of 28 with no build info left behind. `npm run clean` works from the previously broken state.
 
 Slip recorded as data: the fix commit was made while lint was failing, because my check and my commit were not chained. Typed lint rules were being applied to the plain JavaScript probe fixture, which is not in the ESLint tsconfig. A follow-up commit ignores that fixture directory. Lint, type-check, format, all tests, both repository scans and audit pass.
-\n
+
+Second slip recorded as data: the docs script for this pull request wrote a literal backslash and n at the end of this file instead of a newline (an escaped sequence inside a quoted heredoc). It was caught by inspecting the bytes after the push, repaired, and a new repository test now fails if any memory file contains a literal backslash-n. That test was mutation-checked against the same damage.

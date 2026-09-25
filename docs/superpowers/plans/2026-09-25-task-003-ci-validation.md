@@ -591,7 +591,9 @@ export function readIdentities(rootDir) {
 }
 ```
 
-`%x1f` is the ASCII unit separator, which cannot appear in a name or an email, so it is a safe field delimiter where a comma or a space is not.
+`%x1f` is the ASCII unit separator, a better field delimiter than a comma or a space because it does not occur in ordinary names and addresses.
+
+**It is not a guarantee, and the code above is incomplete because it assumes otherwise.** Git accepts a unit separator inside an ident, so a crafted author name shifts every field one place and the five-way destructure above silently discards the surplus — producing zero findings for a commit whose metadata holds a real personal address. This was demonstrated against the first implementation of this task. Any parse of `git log` output must therefore assert it got exactly the number of fields it expected and treat a malformed ident as a finding in its own right, never as a line to skip. The same reasoning applies to the `-email` suffix test in `scanIdentities`: an address in a *name* field is just as much a leak, so check every field for one, not only the fields called email.
 
 - [ ] **Step 4: Call it from the main block**
 

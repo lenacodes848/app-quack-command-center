@@ -187,3 +187,8 @@ The project is finished only when the PRD's final quality gate (section 17) and 
 ## Prompt to start your session
 
 > Read `HANDOFF.md`, then the files it lists in order. Verify the environment as in Step 0. Then continue from `Current task` in `plan.md`, following the working method and stopping at each owner gate.
+
+## Update log
+
+- 2026-09-24, after this document was written: TASK_002 (monorepo scaffold) was completed on branch `phase-1/foundation`. The current task in `plan.md` is now TASK_003. The sections above describe the state at the end of Phase 0. For anything newer, `plan.md`, `progress.md` and `research.md` are authoritative. Notable changes from TASK_002: the repository is now an npm workspace with `packages/contracts`, `packages/config`, `apps/server` and `apps/web`, Vitest is on 4.1.11 (advisory in 4.1.10), a root override pins a single Vite 8.1.5, and Prettier covers code and config only.
+

@@ -4,16 +4,17 @@ Last updated: 2026-09-24
 
 Full phase plan: `docs/superpowers/plans/2026-09-24-personal-ai-command-center.md`
 
-Active goal: Phase 0 (discovery, decisions, repository) is complete and merged. Phase 1 (foundation, TASK_002 to TASK_005) is next.
+Active goal: Phase 0 (discovery, decisions, repository) is complete and merged. Phase 1 (foundation, TASK_002 to TASK_005) is under way: TASK_002 is done.
 
 Handoff for the next coding agent: `HANDOFF.md`
 
-Current task: TASK_002
+Current task: TASK_003
 
-TASK_002 has not started and is unblocked, because the Phase 0 pull requests were merged on 2026-09-24 (UTC 2026-09-25). Start by writing the Phase 1 bite-sized TDD plan, as described in `HANDOFF.md`.
+TASK_002 is complete on branch `phase-1/foundation` (2026-09-24). TASK_003 has not started. It needs an owner decision about branch protection, see `HANDOFF.md`.
 
 ## Recently completed
 
+- TASK_002 Monorepo scaffold and pinned toolchain (2026-09-24)
 - TASK_001 Source separated repository and project memory (2026-09-24)
 
 ## Blocked work
@@ -29,7 +30,7 @@ Status values: pending, completed, pending_decision, not_applicable. Excluded ta
 | Task | Name | Depends on | Phase | Status |
 |---|---|---|---|---|
 | TASK_001 | Source separated repository and project memory | none | 0 | completed |
-| TASK_002 | Monorepo scaffold and pinned toolchain | 001 | 1 | pending |
+| TASK_002 | Monorepo scaffold and pinned toolchain | 001 | 1 | completed |
 | TASK_003 | Continuous integration and validation commands | 002 | 1 | pending |
 | TASK_004 | Shared contracts and state machines | 002 | 1 | pending |
 | TASK_005 | SQLite storage and migrations | 004 | 1 | pending |

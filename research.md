@@ -14,19 +14,19 @@ Last updated: 2026-09-24
 
 ## Dependency verification (2026-09-24)
 
-The PRD pins were observed on 2026-07-28. The npm registry on 2026-09-24 reports the versions below. The PRD requires the whole set to be reverified together before installation. Nothing is installed in the repository yet. The whole set was installed, type checked, built and tested together on 2026-09-24, see the spike below.
+The PRD pins were observed on 2026-07-28. The npm registry on 2026-09-24 reports the versions below. The PRD requires the whole set to be reverified together before installation. The whole set was installed, type checked, built and tested together on 2026-09-24, see the spike below.
 
 | Package | PRD pin | Registry latest | Plan |
 |---|---|---|---|
 | Node.js | 24.18.0 | 24.21.0 (LTS) | Use 24.21.0, same LTS line |
 | TypeScript | 6.0.2 | 7.0.2 | New major. Staying on 6.0.2: typescript-eslint does not support 7 (see spike below) |
 | React | 19.2.8 | 19.3.0 | Use the PRD pin (verified together, see spike below) |
-| Vite | 8.1.5 | 8.3.1 | Use the PRD pin (verified together, see spike below) |
+| Vite | 8.1.5 | 8.3.1 | Use the PRD pin. A root override keeps a single copy, see Failed approaches |
 | @vitejs/plugin-react | 6.0.4 | 6.1.1 | Use the PRD pin (verified together, see spike below) |
 | Fastify | 5.10.0 | 5.12.5 | Use the PRD pin (verified together, see spike below) |
 | Zod | 4.4.3 | 4.6.5 | Use the PRD pin (verified together, see spike below) |
 | Tailwind CSS | 4.3.3 | 4.3.3 | Matches |
-| Vitest | 4.1.10 | 5.0.1 | New major. Staying on 4.1.10 (5.0.1 also passed the spike, no need yet) |
+| Vitest | 4.1.10 | 5.0.1 | New major. Using 4.1.11, the patched release of the 4.1 line (4.1.10 has an advisory), see decisions below |
 | Playwright | 1.62.0 | 1.63.0 | Use the PRD pin (verified together, see spike below) |
 | better-sqlite3 | 13.0.1 | 13.0.3 | Use the PRD pin 13.0.1 (loads, FTS5, backup verified). 13.0.3 also verified |
 
@@ -102,6 +102,9 @@ Recheck before each adapter. All are listed in PRD section 16.
 - Cloudflare Access self hosted app: https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/
 
 ## Failed approaches
+
+- 2026-09-24: With Vite pinned at 8.1.5 in the web workspace, Vitest 4.1.11 and both Vite plugins resolved 8.3.1 at the root, giving two copies of Vite. The web `vite.config.ts` then failed to type-check with "Excessive stack depth comparing types" because plugin types and config types came from different Vite versions, even though the build itself worked. Fix: a root `overrides` entry `"vite": "8.1.5"` so every consumer shares one copy (npm ls now shows a single version, marked overridden). Vitest accepts Vite ^6, ^7 or ^8, so it runs fine on 8.1.5. Revisit the override when the Vite pin is deliberately raised.
+- 2026-09-24: npm 11 also reports `fsevents@2.3.3` (macOS-only optional file watcher pulled in by Vite) as an unapproved install script. Its prebuilt binary ships in the package, so the script is unnecessary. Left unapproved for the same reason as better-sqlite3.
 
 - 2026-09-24: A workflow `permissions: contents: read` block makes `gitleaks/gitleaks-action@v2` crash with HTTP 403 on `pull_request` events, because a permissions block sets every unlisted scope to none and the action lists the PR's commits. The fix is `pull-requests: read`. A passing `push` run does not prove the pull request path works, because it never calls that API. The action's PR comments need `pull-requests: write`, so they are disabled with `GITLEAKS_ENABLE_COMMENTS: "false"` to keep the token read-only.
 

@@ -1646,42 +1646,44 @@ Description: Create the server, web, shared package, test, and script workspaces
 
 Acceptance criteria:
 
-1. [ ] Workspace commands run from the repository root.
+1. [x] Workspace commands run from the repository root.
 
-2. [ ] TypeScript strict mode is enabled.
+2. [x] TypeScript strict mode is enabled.
 
-3. [ ] The server and web application build separately.
+3. [x] The server and web application build separately.
 
-4. [ ] Production dependencies and development dependencies are exact in the lockfile.
+4. [x] Production dependencies and development dependencies are exact in the lockfile.
 
-5. [ ] Node.js version is pinned.
+5. [x] Node.js version is pinned.
 
-6. [ ] Environment variable types and validation exist.
+6. [x] Environment variable types and validation exist.
 
-7. [ ] No secret is placed in a Vite exposed environment variable.
+7. [x] No secret is placed in a Vite exposed environment variable.
 
 Test requirements:
 
-1. [ ] A clean install passes.
+1. [x] A clean install passes.
 
-2. [ ] Type checking passes.
+2. [x] Type checking passes.
 
-3. [ ] The production build passes.
+3. [x] The production build passes.
 
-4. [ ] An invalid environment fixture fails with an actionable message.
+4. [x] An invalid environment fixture fails with an actionable message.
 
 ```json
 {
   "task_id": "TASK_002",
   "name": "Monorepo scaffold and pinned toolchain",
-  "status": "pending",
-  "tests_status": "not_written",
-  "unit_tests_passing": false,
-  "integration_tests_passing": false,
+  "status": "completed",
+  "tests_status": "passing",
+  "unit_tests_passing": true,
+  "integration_tests_passing": true,
   "dependencies": ["TASK_001"],
   "estimated_complexity": "medium"
 }
 ```
+
+Completed 2026-09-24 (verified locally, CI evidence recorded in `progress.md` once the pull request has run). Validation: clean clone `npm ci`, `npm run typecheck`, `npm test` (24 tests), `npm run build`, plus lint, format check, audit and the repository scans. Deviation from the PRD pins: Vitest 4.1.11 (advisory in 4.1.10) and a root override pinning a single Vite 8.1.5, see `research.md`.
 
 ### Task 003: Continuous integration and validation commands
 
@@ -3591,11 +3593,11 @@ When an attempt fails:
 
 ### Completed tasks
 
-TASK_001 (2026-09-24). TASK_033 and TASK_034 are recorded as not_applicable (`STUDENT_DECISIONS.md` sections 12 and 13).
+TASK_001 and TASK_002 (2026-09-24). TASK_033 and TASK_034 are recorded as not_applicable (`STUDENT_DECISIONS.md` sections 12 and 13).
 
 ### Current task
 
-TASK_002
+TASK_003
 
 ### Blockers and notes
 

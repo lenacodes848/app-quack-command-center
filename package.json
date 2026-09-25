@@ -15,7 +15,7 @@
     "build": "npm run build:server && npm run build:web",
     "build:server": "tsc -b apps/server",
     "build:web": "npm run build --workspace @quack/web",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && tsc -p apps/web",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -33,5 +33,8 @@
     "typescript": "6.0.2",
     "typescript-eslint": "8.70.1",
     "vitest": "4.1.11"
+  },
+  "overrides": {
+    "vite": "8.1.5"
   }
 }

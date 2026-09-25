@@ -83,7 +83,32 @@ test('progress.md has a dated entry', () => {
 test('a secrets scanner runs in CI', () => {
   const wf = read('.github/workflows/secrets.yml');
   assert.match(wf, /gitleaks/i);
-  assert.match(wf, /node --test/);
+});
+
+test('CI grants the gitleaks action the pull-requests scope it needs on pull_request events', () => {
+  const wf = read('.github/workflows/secrets.yml');
+  const perms = wf.match(/^permissions:\n((?:[ ]{2}[a-z-]+:\s*\w+\n)+)/m);
+  assert.ok(perms, 'workflow must declare a permissions block');
+  assert.match(perms[1], /^ {2}contents:\s*read$/m);
+  assert.match(perms[1], /^ {2}pull-requests:\s*read$/m);
+  assert.doesNotMatch(perms[1], /:\s*write/, 'no write scopes: least privilege');
+});
+
+test('CI does not ask gitleaks to post PR comments, which would need a write scope', () => {
+  assert.match(read('.github/workflows/secrets.yml'), /GITLEAKS_ENABLE_COMMENTS:\s*"?false"?/);
+});
+
+test('CI runs the same npm scripts a developer runs locally', () => {
+  const wf = read('.github/workflows/secrets.yml');
+  assert.match(wf, /run:\s*npm run test:repo/);
+  assert.match(wf, /run:\s*npm run scan:source/);
+  assert.doesNotMatch(wf, /node --test/, 'call npm run test:repo so CI and local cannot diverge');
+});
+
+test('CI push trigger is limited to main so branch pushes do not run twice', () => {
+  const wf = read('.github/workflows/secrets.yml');
+  assert.match(wf, /push:\n\s+branches:\s*\[main\]/);
+  assert.match(wf, /pull_request:/);
 });
 
 test('local-only files are gitignored', () => {

@@ -3603,7 +3603,9 @@ TASK_013 needs owner approval of the written device pairing design first. TASK_0
 
 ### Test results log
 
-2026-09-24: `npm run test:repo` 24 of 24 passing, source protection scan passing, gitleaks working tree scan clean.
+2026-09-24: local only, `npm run test:repo` 24 of 24 passing, source protection scan passing, `npm run scan:secrets` (gitleaks) clean. The first CI run on the pull request failed (gitleaks action missing the `pull-requests: read` scope), so CI evidence was not yet available.
+
+2026-09-24 (after review): workflow fixed test first, `npm run test:repo` 28 of 28 locally. The CI result on the pull request is recorded in `progress.md`.
 
 ## 14. Dependency graph
 

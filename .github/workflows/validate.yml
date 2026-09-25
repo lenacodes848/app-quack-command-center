@@ -1,0 +1,74 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install from the lockfile
+        run: npm ci
+      - name: Format check
+        run: npm run format:check
+      - name: Lint
+        run: npm run lint
+      - name: Type check
+        run: npm run typecheck
+      - name: Repository tests
+        run: npm run test:repo
+      - name: Unit tests with coverage
+        run: npm run test:coverage
+      - name: Build
+        run: npm run build
+      - name: Integration tests
+        run: npm run test:integration
+      - name: Retain the coverage report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage
+          path: coverage
+          retention-days: 14
+          if-no-files-found: error
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install from the lockfile
+        run: npm ci
+      - name: Install the chromium browser
+        run: npx playwright install --with-deps chromium
+      - name: Build the web application
+        run: npm run build:web
+      - name: Browser smoke test
+        run: npm run test:e2e
+      - name: Retain the browser report and failure artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 14
+          if-no-files-found: ignore

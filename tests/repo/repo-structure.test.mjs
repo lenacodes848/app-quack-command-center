@@ -406,3 +406,42 @@ test('validate runs build immediately before test:e2e, joined by exactly &&, wit
       'with nothing to serve',
   );
 });
+
+test('CI runs the full validation on a supported Node LTS, caching dependencies only', () => {
+  const wf = read('.github/workflows/validate.yml');
+  assert.match(wf, /node-version-file:\s*\.nvmrc/, 'Node version comes from .nvmrc, never inline');
+  assert.match(wf, /cache:\s*npm/, 'dependencies are cached');
+  assert.doesNotMatch(wf, /\.env|data\/|\.db\b/, 'never cache secrets or mutable database state');
+  for (const step of ['format:check', 'lint', 'typecheck', 'test:repo', 'test:coverage', 'build']) {
+    assert.match(wf, new RegExp(`npm run ${step}\\b`), `CI must run ${step}`);
+  }
+  assert.match(wf, /npm run test:integration\b/, 'CI must run the integration project');
+  assert.match(wf, /npm run test:e2e\b/, 'CI must run the browser smoke test');
+  assert.match(wf, /npm ci\b/, 'CI installs from the lockfile, never npm install');
+});
+
+test('CI retains coverage and browser failure artifacts', () => {
+  const wf = read('.github/workflows/validate.yml');
+  assert.match(wf, /actions\/upload-artifact@[0-9a-f]{40}/, 'artifacts are uploaded');
+  assert.match(wf, /coverage/, 'coverage must be retained');
+  assert.match(wf, /playwright-report/, 'the browser report must be retained');
+  assert.match(wf, /test-results/, 'screenshots, traces and videos must be retained');
+  assert.match(
+    wf,
+    /if:\s*\$\{\{\s*(?:!\s*cancelled\(\)|always\(\))\s*\}\}/,
+    'artifacts must upload even on failure',
+  );
+});
+
+test('the required check names the ruleset depends on do not drift', () => {
+  const wf = read('.github/workflows/validate.yml');
+  assert.match(wf, /^ {2}validate:$/m, 'the job must be named validate');
+  assert.match(wf, /^ {2}e2e:$/m, 'the job must be named e2e');
+});
+
+test('a dist cache is never keyed without its build info', () => {
+  const wf = read('.github/workflows/validate.yml');
+  if (/path:[^\n]*dist/.test(wf)) {
+    assert.match(wf, /tsbuildinfo/, 'caching dist without its .tsbuildinfo causes stale builds');
+  }
+});

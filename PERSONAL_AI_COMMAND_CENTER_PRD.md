@@ -1605,38 +1605,40 @@ Description: Create a new repository and record the product decisions, host envi
 
 Acceptance criteria:
 
-1. [ ] The repository is separate from every private reference project.
+1. [x] The repository is separate from every private reference project.
 
-2. [ ] `discovery.md`, `research.md`, `plan.md`, and `progress.md` exist.
+2. [x] `discovery.md`, `research.md`, `plan.md`, and `progress.md` exist.
 
-3. [ ] `STUDENT_DECISIONS.md` is complete.
+3. [x] `STUDENT_DECISIONS.md` is complete.
 
-4. [ ] The installed Node.js and provider versions are recorded.
+4. [x] The installed Node.js and provider versions are recorded.
 
-5. [ ] The source separation rule is copied into `discovery.md`.
+5. [x] The source separation rule is copied into `discovery.md`.
 
-6. [ ] A secrets baseline scan passes.
+6. [x] A secrets baseline scan passes.
 
 Test requirements:
 
-1. [ ] A repository structure test confirms required files.
+1. [x] A repository structure test confirms required files.
 
-2. [ ] A source protection test rejects known private domains and paths configured in a local deny list.
+2. [x] A source protection test rejects known private domains and paths configured in a local deny list.
 
-3. [ ] A secrets scanner runs in CI.
+3. [x] A secrets scanner runs in CI.
 
 ```json
 {
   "task_id": "TASK_001",
   "name": "Source separated repository and project memory",
-  "status": "pending",
-  "tests_status": "not_written",
-  "unit_tests_passing": false,
-  "integration_tests_passing": false,
+  "status": "completed",
+  "tests_status": "passing",
+  "unit_tests_passing": true,
+  "integration_tests_passing": true,
   "dependencies": [],
   "estimated_complexity": "low"
 }
 ```
+
+Completed 2026-09-24. Validation: `npm run test:repo` (24 tests), `npm run scan:source`, `npm run scan:secrets`. Details in `progress.md`.
 
 ### Task 002: Monorepo scaffold and pinned toolchain
 
@@ -3241,7 +3243,7 @@ Test requirements:
 {
   "task_id": "TASK_033",
   "name": "Orchestration session type",
-  "status": "pending",
+  "status": "not_applicable",
   "tests_status": "not_written",
   "unit_tests_passing": false,
   "integration_tests_passing": false,
@@ -3290,7 +3292,7 @@ Test requirements:
 {
   "task_id": "TASK_034",
   "name": "Two provider review loop",
-  "status": "pending",
+  "status": "not_applicable",
   "tests_status": "not_written",
   "unit_tests_passing": false,
   "integration_tests_passing": false,
@@ -3589,19 +3591,19 @@ When an attempt fails:
 
 ### Completed tasks
 
-Agent: Add completed task identifiers here.
+TASK_001 (2026-09-24). TASK_033 and TASK_034 are recorded as not_applicable (`STUDENT_DECISIONS.md` sections 12 and 13).
 
 ### Current task
 
-Agent: Write exactly one current task identifier here.
+TASK_002
 
 ### Blockers and notes
 
-Agent: Record genuine blockers and important discoveries here.
+TASK_013 needs owner approval of the written device pairing design first. TASK_009, TASK_011 and TASK_028 wait for the second provider decision at the Phase 6 gate. TASK_030 and TASK_032 wait for the tmux compatibility decision at the Phase 7 gate. See `plan.md`.
 
 ### Test results log
 
-Agent: Add dated validation summaries here.
+2026-09-24: `npm run test:repo` 24 of 24 passing, source protection scan passing, gitleaks working tree scan clean.
 
 ## 14. Dependency graph
 

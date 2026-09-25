@@ -1,0 +1,5 @@
+# Copy to .source-protection-denylist (gitignored) and add one literal per line.
+# Matching is case insensitive. Use it for private domains, paths, names and
+# internal service names that must never appear in this repository.
+# Never commit the real file.
+private-host.example

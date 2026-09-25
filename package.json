@@ -1,0 +1,14 @@
+{
+  "name": "app-quack-command-center",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Quack Command Center: a local-first, single-owner web dashboard for coding agents.",
+  "engines": {
+    "node": ">=24.21.0 <25"
+  },
+  "scripts": {
+    "test:repo": "node --test \"tests/repo/*.test.mjs\"",
+    "scan:source": "node scripts/source-protection-scan.mjs",
+    "scan:secrets": "gitleaks dir . --no-banner --redact"
+  }
+}

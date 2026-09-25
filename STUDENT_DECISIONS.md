@@ -2,31 +2,33 @@
 
 The coding agent will inspect the local environment, ask the owner one initial batch of questions, and complete this file from the approved answers before implementation begins.
 
+Completed 2026-09-24 from the owner's answers and the local discovery in `discovery.md`. Entries marked "proposed" were drafted by the coding agent and are open for owner edits during PR review. Entries marked "deferred" are decided in principle and get their concrete values at the named phase gate in `docs/superpowers/plans/2026-09-24-personal-ai-command-center.md`.
+
 ## 1. Product identity
 
-Product name:
+Product name: Quack Command Center
 
-Short subtitle:
+Short subtitle: Your coding agents, from anywhere (proposed)
 
-Primary color:
+Primary color: Amber #F5B301, used with dark text for contrast
 
-Icon or emoji:
+Icon or emoji: 🦆
 
 ## 2. Host computer
 
-Operating system:
+Operating system: macOS
 
-Supported version:
+Supported version: macOS 15 and later on Apple silicon (arm64), verified on 15.7
 
-Primary shell:
+Primary shell: zsh
 
-Default projects directory:
+Default projects directory: ~/Downloads/1-git (temporary. Revisit before Phase 7, when the background service is installed, because Downloads is a macOS-protected folder. Moving to ~/Projects is a configuration change.)
 
 ## 3. Initial providers
 
 Mark the providers you want in the first release. At least one of the first two is required, because a subscription coding agent is what the dashboard exists to drive.
 
-1. [ ] Claude Code
+1. [x] Claude Code
 
 2. [ ] Codex
 
@@ -36,45 +38,39 @@ Mark the providers you want in the first release. At least one of the first two 
 
 5. [ ] Another provider
 
-If a hosted model provider is selected, name it and give its documentation URL. The reference implementation of this kit uses **NanoGPT** (`https://nano-gpt.com`, OpenAI compatible at `https://nano-gpt.com/api/v1`), which is pay as you go with no subscription, which is why it suits a build you are only starting. Any OpenAI compatible endpoint works through the same adapter.
+Second provider: deferred to the Phase 6 gate. Codex, Hermes and the hosted provider tasks (009, 011, 028) stay pending_decision until then. Cross-provider handoff (021) needs the second provider.
 
-Hosted provider name:
+Hosted provider name: n/a (not selected)
 
-Base URL:
+Base URL: n/a (not selected)
 
-If another provider is selected, write its name and official documentation URL:
+Another provider name and documentation URL: n/a (not selected)
 
 ## 4. Hosted model selection
 
-Complete this section only when a hosted model provider is selected.
+not_applicable: no hosted model provider is selected in section 3. Revisit at the Phase 6 gate.
 
-Every model you list must pass the tool calling gate before it is registered. A model that cannot emit a tool call cannot act as an agent here, however good its prose is. Verify it, then record what you verified.
+Models to register, with the context window you measured for each: n/a (no hosted provider)
 
-Models to register, with the context window you measured for each:
+Model used when a session starts with no explicit choice: n/a (no hosted provider)
 
-Model used when a session starts with no explicit choice:
+Number of API keys for this provider: n/a (no hosted provider)
 
-Number of API keys for this provider:
+Failover order when a key is exhausted or rejected: n/a (no hosted provider)
 
-Failover order when a key is exhausted or rejected:
-
-Do you want to see per key consumption in the dashboard? Count work done locally, because most providers publish no quota header and work remaining cannot be known.
-
-1. [ ] Yes
-
-2. [ ] No
+Per key consumption display: n/a (no hosted provider)
 
 ## 5. Account profiles
 
 List the account labels you want visible in the dashboard. Use labels only. Never paste credentials into this file.
 
-Claude Code profile labels:
+Claude Code profile labels: personal
 
-Codex profile labels:
+Codex profile labels: n/a (not selected)
 
-Hermes profile labels:
+Hermes profile labels: n/a (not selected)
 
-Hosted provider key labels:
+Hosted provider key labels: n/a (not selected)
 
 ## 6. Remote access
 
@@ -82,98 +78,90 @@ Choose one.
 
 1. [ ] Local computer only
 
-2. [ ] Named Cloudflare Tunnel with Cloudflare Access
+2. [x] Named Cloudflare Tunnel with Cloudflare Access
 
-For phone access, option two is recommended.
+Sequencing: local first. Build and use on loopback through Phase 5. Cloudflare Tunnel and Access are set up in Phase 6, the Access policy before the tunnel route, and no public hostname is enabled without the owner's explicit approval at that gate.
 
-Every tunnel must require authentication. Never expose the dashboard through an unauthenticated URL.
+Desired hostname: deferred to the Phase 6 gate (requires a domain managed through Cloudflare)
 
-Desired hostname:
-
-Allowed login email:
+Allowed login email: deferred to the Phase 6 gate (the owner's own verified email, recorded then and never committed to this repository)
 
 ## 7. Application authentication
 
 Choose one. The coding agent must not begin `TASK_013` until this choice is selected and the owner approves the design.
 
-1. [ ] Owner device pairing with a secure application session
+1. [x] Owner device pairing with a secure application session
 
 2. [ ] Owner password with a secure application session
 
-Device pairing is recommended for a strictly single owner system behind Cloudflare Access. The application session must still expire, support revocation, and use a secure HTTP only cookie.
+Design approval: the owner selected device pairing on 2026-09-24. The written design still needs the owner's explicit approval in `research.md` before `TASK_013` starts.
 
 ## 8. Permission policy
 
 Choose the default.
 
-1. [ ] Ask before important actions
+1. [x] Ask before important actions
 
 2. [ ] Provider default
 
 3. [ ] Read only planning mode
 
-Automatic permission bypass must remain unavailable from the browser in the first release.
-
-If a provider offers a reduced prompting mode that you use in your own terminal, the dashboard must verify that the launched session actually entered that mode, and show the real mode on the session row. A session that reports one mode and runs in another is the defect this decision exists to prevent.
+Automatic permission bypass remains unavailable from the browser in the first release.
 
 ## 9. Idle session policy
 
 Choose the default.
 
-1. [ ] Never stop sessions automatically
+1. [x] Never stop sessions automatically
 
 2. [ ] Archive after a chosen number of inactive days
 
 3. [ ] Ask before cleanup
 
-Idle threshold in days:
+Idle threshold in days: n/a (automatic cleanup is disabled until the owner enables a policy)
 
 ## 10. Attachment limits
 
-Maximum file size:
+Maximum file size: 10 MB
 
-Allowed file types:
+Allowed file types: png, jpg, webp, gif, pdf, txt, md
 
-Do you want to select several images in one pass on mobile?
+Multiple images in one pass on mobile:
 
-1. [ ] Yes
+1. [x] Yes
 
 2. [ ] No
 
-Files must be written to a dedicated temporary attachment directory. They must never be written to an arbitrary path supplied by the browser.
+Files are written to a dedicated temporary attachment directory and never to a path supplied by the browser.
 
 ## 11. Launch seeds
 
 A launch seed is a stored instruction the dashboard sends into a brand new session so that one tap starts a specific kind of work.
 
-List the seeds you want, by name:
+List the seeds you want, by name: none for the first release. Names are chosen at the Phase 7 gate.
 
 The launch endpoint must accept a seed key only. Free text from the browser at that endpoint would turn a launch into a way to type arbitrary input into a terminal, so anything unrecognised is dropped.
 
 ## 12. Optional: orchestration session type
 
-An orchestration session plans a piece of work, dispatches units to implementer sessions, reviews their output, and runs correction rounds until verification passes.
-
 1. [ ] Include it
 
-2. [ ] Leave it out of the first release
+2. [x] Leave it out of the first release
 
-If included, name the planner model, the implementer runtimes you want available, the maximum correction rounds, and the per unit timeout:
+Planner model, implementer runtimes, correction rounds and per unit timeout: n/a (left out). `TASK_033` is not_applicable.
 
 ## 13. Optional: two provider review loop
 
-A review loop is a session where one provider plans and builds while a different provider reviews, and a third fresh session inspects the result.
-
 1. [ ] Include it
 
-2. [ ] Leave it out of the first release
+2. [x] Leave it out of the first release
 
-If included, the rule is structural rather than a preference: the reviewer must be a different provider from the host, and the inspector must be a different provider from the builder. A model grading its own work is the failure the loop exists to prevent, so those two roles are shown locked with the reason, and only the builder, the models, and the round limits are real choices.
+Builder default: n/a (left out)
 
-Builder default:
-
-Maximum rounds:
+Maximum rounds: n/a (left out). `TASK_034` is not_applicable.
 
 ## 14. Definition of the first release
 
 Write one paragraph describing what you want working before adding optional features:
+
+Proposed by the coding agent from the approved plan, open for owner edits: On my Mac I can open Quack Command Center in a browser and see my live agent sessions and my saved conversations in two separate lists. I can launch a Claude Code session by choosing a profile, model, reasoning setting and a working directory under my allowed projects directory, then send messages and watch each one move through queued, accepted, confirmed or failed while the reply streams in. When Claude Code asks for permission or a choice, I can answer it with buttons, and I can stop a running turn without losing the conversation. I can hide sensitive text with privacy mode, and after restarting the service I can resume the exact same Claude Code conversation. Everything runs on loopback behind a paired-device login, no provider credential ever reaches the browser, and the automated tests pass at desktop (1440 by 900) and mobile (390 by 844) sizes. Phone access through Cloudflare, a second provider, attachments, provider handoff, the command palette, search and always-on service startup come after this.

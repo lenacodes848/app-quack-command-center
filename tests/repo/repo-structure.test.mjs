@@ -332,8 +332,14 @@ test('one command runs the complete local validation', () => {
 test('validate runs the cheap checks before the expensive ones', () => {
   const validate = JSON.parse(read('package.json')).scripts.validate;
   const at = (step) => validate.indexOf(`npm run ${step}`);
-  assert.ok(at('format:check') < at('lint'), 'format check is cheapest, it goes first');
-  assert.ok(at('lint') < at('typecheck'), 'lint before type-check');
+  assert.ok(at('format:check') < at('typecheck'), 'format check is cheapest, it goes first');
+  assert.ok(
+    at('typecheck') < at('lint'),
+    'type-check must run before lint: type-aware lint rules resolve cross-workspace imports ' +
+      'through project-reference declaration files that only tsc -b emits, so on a clean ' +
+      'tree (no leftover dist/ from a prior build) linting before type-checking makes those ' +
+      'imports resolve to any and trips the unsafe-* and restrict-template-expressions rules',
+  );
   assert.ok(at('typecheck') < at('test:coverage'), 'type-check before unit tests');
 });
 

@@ -28,7 +28,7 @@
     "scan:source": "node scripts/source-protection-scan.mjs",
     "scan:secrets": "gitleaks dir . --no-banner --redact",
     "scan:secrets:history": "node scripts/scan-history.mjs",
-    "validate": "npm run format:check && npm run lint && npm run typecheck && npm run test:repo && npm run test:coverage && npm run test:integration && npm run build && npm run test:e2e && npm run scan:source && npm run scan:secrets && npm run scan:secrets:history"
+    "validate": "npm run format:check && npm run typecheck && npm run lint && npm run test:repo && npm run test:coverage && npm run test:integration && npm run build && npm run test:e2e && npm run scan:source && npm run scan:secrets && npm run scan:secrets:history"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

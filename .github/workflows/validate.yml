@@ -25,10 +25,10 @@ jobs:
         run: npm ci
       - name: Format check
         run: npm run format:check
-      - name: Lint
-        run: npm run lint
       - name: Type check
         run: npm run typecheck
+      - name: Lint
+        run: npm run lint
       - name: Repository tests
         run: npm run test:repo
       - name: Unit tests with coverage

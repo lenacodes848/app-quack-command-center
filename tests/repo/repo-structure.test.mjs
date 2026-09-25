@@ -139,6 +139,12 @@ test('every workflow keeps its token read-only, at the top level and in every jo
       /^permissions:\n {2}contents:\s*read$/m,
       `${file} must declare a read-only top-level permissions block`,
     );
+    // Deliberately stricter than least privilege, not equal to it. A job-level
+    // block that only NARROWS scope is GitHub's own recommendation and would be
+    // rejected here too. The blanket ban is the cheap, unambiguous rule while
+    // no job needs a scope; when one genuinely does — TASK_023 and TASK_024 may
+    // want a write scope or OIDC id-token: write — relax this assertion to
+    // allow that specific job and scope rather than dropping the guard.
     assert.doesNotMatch(wf, /:\s*write\b/, `${file} grants a write scope somewhere`);
     assert.doesNotMatch(
       wf,
@@ -529,18 +535,30 @@ test('the coverage and browser-report uploads pin different if-no-files-found va
   const wf = read('.github/workflows/validate.yml');
   const steps = uploadArtifactSteps(wf);
   const coverage = steps.find(({ step }) => /name:\s*coverage\b/.test(step));
-  const playwright = steps.find(({ step }) => /name:\s*playwright-report\b/.test(step));
+  const report = steps.find(({ step }) => /name:\s*playwright-report\b/.test(step));
+  const failures = steps.find(({ step }) => /name:\s*playwright-failures\b/.test(step));
   assert.ok(coverage, 'a coverage upload-artifact step must exist');
-  assert.ok(playwright, 'a playwright-report upload-artifact step must exist');
+  assert.ok(report, 'a playwright-report upload-artifact step must exist');
+  assert.ok(failures, 'a playwright-failures upload-artifact step must exist');
+
+  // The report and the failure artifacts are uploaded separately because they
+  // have genuinely different emptiness semantics. Bundling them forced the
+  // whole upload down to `ignore`, which silently gave up the false-green
+  // protection on a report that is in fact always written.
+  for (const [label, step] of [
+    ['coverage', coverage.step],
+    ['browser report', report.step],
+  ]) {
+    assert.match(
+      step,
+      /if-no-files-found:\s*error/,
+      `the ${label} upload must use if-no-files-found: error; it is written on every run, so a missing one means something went wrong — the false-green shape of bug #3`,
+    );
+  }
   assert.match(
-    coverage.step,
-    /if-no-files-found:\s*error/,
-    'the coverage upload must use if-no-files-found: error; a silently missing coverage report is exactly the false-green bug #3 already shipped',
-  );
-  assert.match(
-    playwright.step,
+    failures.step,
     /if-no-files-found:\s*ignore/,
-    'the browser-report upload must use if-no-files-found: ignore; it is correctly empty when nothing failed',
+    'test-results is the one directory that is correctly empty when nothing failed, so only it may ignore a missing path',
   );
 });
 
@@ -552,6 +570,11 @@ test('CI retains coverage and browser failure artifacts', () => {
   assert.match(wf, /test-results/, 'screenshots, traces and videos must be retained');
 });
 
+// This is a two-file coupling on purpose: the branch-protection ruleset on
+// main requires the checks by the literal names "validate" and "e2e", so
+// renaming a job here silently stops a required check from ever reporting and
+// blocks every merge. Adding a job is a two-file change for the same reason —
+// decide whether the ruleset should require it, then update both.
 test('the required check names the ruleset depends on do not drift', () => {
   const wf = read('.github/workflows/validate.yml');
   const jobs = parseWorkflowJobs(wf);

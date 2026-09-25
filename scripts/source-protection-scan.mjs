@@ -96,12 +96,26 @@ export function scanIdentities(identities, denylist) {
   return findings;
 }
 
-export function readIdentities(rootDir) {
+/**
+ * Which history the identity scan covers.
+ *
+ * HEAD, not `--all`. `--all` walks every ref in the checkout, so a stale local
+ * branch or a leftover `refs/remotes/pr/*` from before a history rewrite fails
+ * the scan with a finding that has nothing to do with the code under review —
+ * and because the scanner deliberately prints no matched text, the message is
+ * near-undiagnosable. Scoping to HEAD means the scan covers exactly the history
+ * being proposed. Override with SOURCE_PROTECTION_REF to scan something else.
+ */
+export function identityRef() {
+  return process.env.SOURCE_PROTECTION_REF ?? 'HEAD';
+}
+
+export function readIdentities(rootDir, ref = identityRef()) {
   // -z NUL-terminates each commit record instead of relying on a bare newline,
   // which is a more reliable boundary than a character an ident field can contain.
   let out;
   try {
-    out = execFileSync('git', ['log', '-z', '--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce', '--all'], {
+    out = execFileSync('git', ['log', '-z', '--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce', ref], {
       cwd: rootDir,
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
@@ -121,7 +135,10 @@ export function readIdentities(rootDir) {
     // a name or email — but git does not forbid it, so a record that doesn't split
     // into exactly 5 fields is itself suspicious and must be flagged, not skipped.
     const fields = record.split('\x1f');
-    const commit = (fields[0] ?? '').slice(0, 7) || 'unknown';
+    // Name the ref alongside the commit. A finding prints no matched text by
+    // design, so without the ref the reader is left with a bare seven-character
+    // sha and no way to tell which history it came from.
+    const commit = `${(fields[0] ?? '').slice(0, 7) || 'unknown'} on ${ref}`;
     if (fields.length !== 5) {
       identities.push({ commit, field: 'record', value: '', malformed: true });
       continue;

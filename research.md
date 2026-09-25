@@ -27,7 +27,7 @@ The PRD pins were observed on 2026-07-28. The npm registry on 2026-09-24 reports
 | Zod | 4.4.3 | 4.6.5 | Use the PRD pin (verified together, see spike below) |
 | Tailwind CSS | 4.3.3 | 4.3.3 | Matches |
 | Vitest | 4.1.10 | 5.0.1 | New major. Using 4.1.11, the patched release of the 4.1 line (4.1.10 has an advisory), see decisions below |
-| Playwright | 1.62.0 | 1.63.0 | Use the PRD pin (verified together, see spike below) |
+| Playwright | 1.62.0 | 1.63.0 | **Deviation: using 1.63.0.** 1.62.0 cannot load this repository's tsconfig (see below) |
 | better-sqlite3 | 13.0.1 | 13.0.3 | Use the PRD pin 13.0.1 (loads, FTS5, backup verified). 13.0.3 also verified |
 
 Rule: exact versions in the lockfile, and any choice that differs from the PRD pin is recorded here with the reason.
@@ -52,6 +52,14 @@ Lint and format on variant A: ESLint 10.11.0, `@eslint/js` 10.0.1, typescript-es
 - **TypeScript stays on 6.0.2.** typescript-eslint 8.70.1 declares `typescript >=4.8.4 <6.1.0`, so TypeScript 7 would leave the required lint stack unsupported, even though the toy project compiled. Revisit when typescript-eslint supports 7.
 - **Vitest stays on the 4.1 line, at 4.1.11 (a deviation from the PRD pin 4.1.10).** `npm audit` on the real repository reported a moderate advisory (path traversal or arbitrary file read through `@vitest/mocker`, GHSA-82fw-gwwq-j7x9) affecting Vitest and `@vitest/coverage-v8` up to 4.1.10. 4.1.11 fixes it and `npm audit` reports 0 vulnerabilities after the bump. Vitest 5.0.1 also passed the toy project, but nothing needs it. Upgrade to 5 deliberately later.
 - Variant B passing means the newer minors are a low-risk future upgrade. It is not a reason to deviate now.
+- **Playwright is 1.63.0, a deviation from the PRD pin 1.62.0 (decided 2026-09-25, on evidence).** The pin was originally 1.63.0 by accident. A review caught the mismatch between the lockfile and this table, so 1.62.0 was installed to correct it — and it does not work here. `npx playwright test` fails before running anything:
+
+  ```
+  Error: Failed to load tsconfig file at ./tsconfig.json:
+  Failed to resolve "references" path "packages/contracts"
+  ```
+
+  1.62.0's tsconfig loader cannot follow this repository's project references, which exist because the monorepo is built with `tsc -b`. 1.63.0 loads the same file and the smoke test passes in 3.3s. The toy project in variant A never hit this because it had no project references. Deviating deliberately, with the evidence, rather than pinning back to a version that cannot run.
 
 **Native module and npm 11 install scripts.** npm 11.19 reports better-sqlite3's `node-gyp rebuild` install script as "not yet covered by allowScripts" and does not run it. The module still loads because the package ships prebuilt binaries for darwin arm64 and x64, linux x64 and arm64 (glibc and musl) and win32, and no compile is needed. Keep the script unapproved: it is unnecessary and install scripts run arbitrary code. Task 003 must confirm the Linux CI runner loads the module the same way.
 
@@ -74,7 +82,10 @@ Lint and format on variant A: ESLint 10.11.0, `@eslint/js` 10.0.1, typescript-es
 - Working directories are restricted to configured roots, resolved through symlinks. Roots are changed locally only, and no API route edits them.
 - Device pairing design: not yet written. It is written here and approved by the owner before TASK_013 starts. The planned shape is a single use, short lived pairing code written to a file with owner-only permissions at startup, exchanged for an HTTP only, secure, same site, expiring and revocable cookie backed by an `app_sessions` table.
 - Secret scanning: CI installs a pinned gitleaks (version and SHA-256 in `.github/workflows/secrets.yml`, checksum taken from the official release and matched against a separate download, and the version must equal the one recorded above) and runs `npm run scan:secrets` (full working tree) and `npm run scan:secrets:history` (full history) with the same scripts a developer runs. The history script fails when gitleaks reports zero commits scanned. The workflow token is read only (`contents: read`). The `gitleaks/gitleaks-action` action is not used, see Failed approaches.
-- Source protection: `scripts/source-protection-scan.mjs` fails on absolute macOS or Linux home directory paths that include a user name (with or without a trailing slash), on email addresses other than the reserved example domains and the SSH remote form (user `git` at a host), and on any entry in the local, gitignored `.source-protection-denylist`. Tilde paths such as `~/Downloads/1-git` are deliberately allowed because they name no user, so the worksheet can name the projects directory. It prints file, line and rule, never the matched text.
+- Source protection: `scripts/source-protection-scan.mjs` fails on absolute macOS or Linux home directory paths that include a user name (with or without a trailing slash), on email addresses other than the reserved example domains, GitHub's noreply forms and the SSH remote form (user `git` at a host), and on any entry in the local, gitignored `.source-protection-denylist`. Tilde paths such as `~/Downloads/1-git` are deliberately allowed because they name no user, so the worksheet can name the projects directory. It prints file, line and rule, never the matched text.
+- Source protection also scans **commit metadata** — author and committer name and email — not only file content. Added 2026-09-25 after the repository was made public with a personal name and address sitting in the author field of 30 of 36 commits while every check was green.
+  - **Scope is `HEAD`, not `--all`.** `--all` walks every ref in a checkout, so a stale local branch or a leftover `refs/remotes/pr/*` fails the scan with a finding unrelated to the code under review — and since the scanner prints no matched text by design, that finding is near-undiagnosable. Findings name the ref alongside the commit. Override with `SOURCE_PROTECTION_REF`.
+  - **Policy consequence of being public (recorded 2026-09-25).** The identity rule applies to whatever history is scanned, so an outside contributor whose commits carry an ordinary personal address will fail `scan:source` on their own pull request. That is intended for a single-owner project, and it is written down here rather than left to be discovered: this repository is public to get required status checks, not to invite contributions. If that ever changes, the rule has to be scoped to the owner's own commits instead of dropped.
 
 ## Known provider limitations and unknowns
 

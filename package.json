@@ -20,6 +20,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "//test": "Unit project only, so it stays fast. Integration and browser tests run in test:integration and test:e2e, and npm run validate runs everything.",
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:coverage": "vitest run --project unit --coverage",

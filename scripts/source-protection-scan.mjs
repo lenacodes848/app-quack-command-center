@@ -20,7 +20,8 @@ const RULES = [
   },
   {
     rule: 'email-address',
-    matches: (text) => [...text.matchAll(EMAIL)].some((m) => m[1] !== 'git'),
+    matches: (text) =>
+      [...text.matchAll(EMAIL)].some((m) => m[1] !== 'git' && !ALLOWED_IDENTITY_EMAIL.test(m[0])),
   },
 ];
 
@@ -61,6 +62,96 @@ export function scanFiles(rootDir, files, denylist) {
   return findings;
 }
 
+// Commit metadata is not file content, so the file rules do not apply to it. The
+// only identities allowed to author a commit here are GitHub's noreply forms.
+const ALLOWED_IDENTITY_EMAIL =
+  /^(?:[A-Za-z0-9._%+-]+@users\.noreply\.github\.com|noreply@github\.com)$/;
+
+// An email-shaped substring anywhere in a commit-metadata field. Unlike the
+// file-content EMAIL rule, this has no example.* exemption and no SSH-remote
+// "git" exception: neither applies to who authored a commit, and a personal
+// address can land in a NAME field (an ordinary `git config user.name` mistake),
+// not only in an email field.
+const EMAIL_TOKEN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+
+export function scanIdentities(identities, denylist) {
+  const findings = [];
+  const deny = denylist.map((d) => d.toLowerCase());
+  for (const { commit, field, value, malformed } of identities) {
+    if (malformed) {
+      findings.push({ file: `commit ${commit}`, line: field, rule: 'malformed-identity' });
+      continue;
+    }
+    const emails = value.match(EMAIL_TOKEN) ?? [];
+    if (emails.some((addr) => !ALLOWED_IDENTITY_EMAIL.test(addr))) {
+      findings.push({ file: `commit ${commit}`, line: field, rule: 'identity-email' });
+    }
+    const lower = value.toLowerCase();
+    for (const d of deny) {
+      if (lower.includes(d)) {
+        findings.push({ file: `commit ${commit}`, line: field, rule: 'deny-list' });
+      }
+    }
+  }
+  return findings;
+}
+
+/**
+ * Which history the identity scan covers.
+ *
+ * HEAD, not `--all`. `--all` walks every ref in the checkout, so a stale local
+ * branch or a leftover `refs/remotes/pr/*` from before a history rewrite fails
+ * the scan with a finding that has nothing to do with the code under review —
+ * and because the scanner deliberately prints no matched text, the message is
+ * near-undiagnosable. Scoping to HEAD means the scan covers exactly the history
+ * being proposed. Override with SOURCE_PROTECTION_REF to scan something else.
+ */
+export function identityRef() {
+  return process.env.SOURCE_PROTECTION_REF ?? 'HEAD';
+}
+
+export function readIdentities(rootDir, ref = identityRef()) {
+  // -z NUL-terminates each commit record instead of relying on a bare newline,
+  // which is a more reliable boundary than a character an ident field can contain.
+  let out;
+  try {
+    out = execFileSync('git', ['log', '-z', '--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce', ref], {
+      cwd: rootDir,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+      // Explicit pipes, not inherited stdio: a git failure's stderr can carry
+      // raw identities, and inherited stdio prints it to our stderr even when
+      // the resulting exception is caught below.
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch {
+    // Never let git's raw stdout/stderr (which can carry commit identities)
+    // reach an uncaught-exception dump. Rethrow a bare message that names no data.
+    throw new Error('readIdentities: failed to read commit metadata from git log');
+  }
+  const identities = [];
+  for (const record of out.split('\0').filter(Boolean)) {
+    // Unit separator, not comma or space, because it cannot legitimately appear in
+    // a name or email — but git does not forbid it, so a record that doesn't split
+    // into exactly 5 fields is itself suspicious and must be flagged, not skipped.
+    const fields = record.split('\x1f');
+    // Name the ref alongside the commit. A finding prints no matched text by
+    // design, so without the ref the reader is left with a bare seven-character
+    // sha and no way to tell which history it came from.
+    const commit = `${(fields[0] ?? '').slice(0, 7) || 'unknown'} on ${ref}`;
+    if (fields.length !== 5) {
+      identities.push({ commit, field: 'record', value: '', malformed: true });
+      continue;
+    }
+    const [, an, ae, cn, ce] = fields;
+    identities.push({ commit, field: 'author-name', value: an });
+    identities.push({ commit, field: 'author-email', value: ae });
+    identities.push({ commit, field: 'committer-name', value: cn });
+    identities.push({ commit, field: 'committer-email', value: ce });
+  }
+  return identities;
+}
+
 function trackedFiles(rootDir) {
   const out = execFileSync(
     'git',
@@ -79,7 +170,10 @@ if (isMain) {
   const denylist = loadDenylist(
     process.env.SOURCE_PROTECTION_DENYLIST ?? join(rootDir, '.source-protection-denylist'),
   );
-  const findings = scanFiles(rootDir, trackedFiles(rootDir), denylist);
+  const findings = [
+    ...scanFiles(rootDir, trackedFiles(rootDir), denylist),
+    ...scanIdentities(readIdentities(rootDir), denylist),
+  ];
   if (findings.length > 0) {
     for (const f of findings) console.error(`${f.file}:${f.line}  ${f.rule}`);
     console.error(

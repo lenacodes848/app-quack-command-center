@@ -5,9 +5,15 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { scanFiles, loadDenylist } from '../../scripts/source-protection-scan.mjs';
+import {
+  scanFiles,
+  loadDenylist,
+  scanIdentities,
+  readIdentities,
+} from '../../scripts/source-protection-scan.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const denylistPath = join(root, '.source-protection-denylist');
 
 function fixture(files) {
   const dir = mkdtempSync(join(tmpdir(), 'sp-'));
@@ -139,4 +145,220 @@ test('every tracked file in this repository passes the source protection scan', 
     encoding: 'utf8',
   });
   assert.match(out, /source protection scan passed/i);
+});
+
+const identity = (value, field = 'author-email') => [{ commit: 'abc1234', field, value }];
+
+// Assembled from parts deliberately. This repository scans its own files, and the
+// file-content email rule rejects any literal address outside example.com — this
+// plan document included. Step 5 below teaches that rule about the noreply forms;
+// until then, a literal here would fail `npm run scan:source`.
+const NOREPLY_USER = ['60458184+someone', 'users.noreply.github.com'].join('@');
+const NOREPLY_BOT = ['noreply', 'github.com'].join('@');
+
+test('a GitHub noreply identity is allowed', () => {
+  assert.deepEqual(scanIdentities(identity(NOREPLY_USER), []), []);
+  assert.deepEqual(scanIdentities(identity(NOREPLY_BOT), []), []);
+});
+
+test('a personal email in commit metadata is a finding', () => {
+  const findings = scanIdentities(identity('someone@example.com'), []);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, 'identity-email');
+  assert.equal(findings[0].file, 'commit abc1234');
+});
+
+test('a deny-listed name in commit metadata is a finding', () => {
+  const findings = scanIdentities(identity('Ada', 'author-name'), ['ada']);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, 'deny-list');
+});
+
+test('identity findings never print the matched text', () => {
+  const findings = scanIdentities(identity('hidden@example.com'), ['hidden']);
+  for (const f of findings) {
+    assert.ok(!JSON.stringify(f).includes('hidden@example.com'));
+    assert.ok(!JSON.stringify(f).includes('hidden'));
+  }
+});
+
+test('committer metadata is scanned, not just author metadata', () => {
+  assert.equal(scanIdentities(identity('someone@example.com', 'committer-email'), []).length, 1);
+  assert.equal(scanIdentities(identity('Ada', 'committer-name'), ['ada']).length, 1);
+});
+
+test('this repository has no deny-listed identity in any commit', () => {
+  const findings = scanIdentities(readIdentities(root), loadDenylist(denylistPath));
+  assert.deepEqual(findings, [], 'commit metadata must be free of personal identities');
+});
+
+test('a GitHub noreply address is not a personal address in file content', () => {
+  const noreply = ['60458184+someone', 'users.noreply.github.com'].join('@');
+  assert.deepEqual(scanText(`commit identity is Lena <${noreply}>\n`), []);
+  assert.deepEqual(scanText(`bot identity is ${['noreply', 'github.com'].join('@')}\n`), []);
+});
+
+test('a genuinely personal address in file content is still a finding', () => {
+  const personal = ['someone', 'somewhere.test'].join('@');
+  const findings = scanText(`write to ${personal}\n`);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, 'email-address');
+});
+
+test('a malformed identity record is a finding, not silently dropped', () => {
+  const findings = scanIdentities(
+    [{ commit: 'abc1234', field: 'record', value: '', malformed: true }],
+    [],
+  );
+  assert.deepEqual(findings, [
+    { file: 'commit abc1234', line: 'record', rule: 'malformed-identity' },
+  ]);
+});
+
+test('a personal address in a NAME field is still a finding, not just an email field', () => {
+  const findings = scanIdentities(identity('someone@example.com', 'author-name'), []);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, 'identity-email');
+});
+
+test('a GitHub noreply address in a NAME field is allowed', () => {
+  assert.deepEqual(scanIdentities(identity(NOREPLY_USER, 'committer-name'), []), []);
+});
+
+// Builds a real, throwaway git repository so readIdentities is exercised against
+// git's actual `-z`/unit-separator output, not a hand-built fixture array.
+function identityRepo() {
+  const dir = mkdtempSync(join(tmpdir(), 'ident-'));
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+  return dir;
+}
+
+function commitWithIdentity(dir, env) {
+  execFileSync('git', ['commit', '--allow-empty', '-q', '-m', 'x'], {
+    cwd: dir,
+    env: { ...process.env, ...env },
+  });
+}
+
+test('a unit separator embedded in an author name is a malformed-identity finding, not a silent field shift', () => {
+  const dir = identityRepo();
+  try {
+    // The real defect: an author NAME containing the field delimiter shifts every
+    // later field by one, so a naive 5-way destructure would silently swallow the
+    // 6th field (here, a personal address) instead of ever seeing it.
+    const nameWithSeparator = ['Bob', 'bot@users.noreply.github.com'].join('\x1f');
+    commitWithIdentity(dir, {
+      GIT_AUTHOR_NAME: nameWithSeparator,
+      GIT_AUTHOR_EMAIL: NOREPLY_USER,
+      GIT_COMMITTER_NAME: NOREPLY_BOT,
+      GIT_COMMITTER_EMAIL: NOREPLY_BOT,
+    });
+    const findings = scanIdentities(readIdentities(dir), []);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].rule, 'malformed-identity');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a personal address used as a real commit author NAME is caught end to end', () => {
+  const dir = identityRepo();
+  try {
+    commitWithIdentity(dir, {
+      GIT_AUTHOR_NAME: 'someone@example.com',
+      GIT_AUTHOR_EMAIL: NOREPLY_USER,
+      GIT_COMMITTER_NAME: NOREPLY_BOT,
+      GIT_COMMITTER_EMAIL: NOREPLY_BOT,
+    });
+    const findings = scanIdentities(readIdentities(dir), []);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].rule, 'identity-email');
+    assert.equal(findings[0].line, 'author-name');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readIdentities fails loudly with a bare message, never printing raw git output', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'notgit-'));
+  try {
+    assert.throws(
+      () => readIdentities(dir),
+      (err) => {
+        assert.equal(err.message, 'readIdentities: failed to read commit metadata from git log');
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the identity scan covers HEAD only, so an unrelated branch cannot fail the build', () => {
+  // Pins the fix to a real operational defect. When this scanned `--all`, a
+  // stale local branch or a leftover refs/remotes/pr/* produced a finding with
+  // no relationship to the code under review — and because findings never
+  // print matched text, the message was near-undiagnosable. `--all` is exactly
+  // the change someone makes in good faith believing it is more thorough,
+  // which is how it got there the first time.
+  const dir = identityRepo();
+  try {
+    commitWithIdentity(dir, {
+      GIT_AUTHOR_NAME: 'Clean',
+      GIT_AUTHOR_EMAIL: NOREPLY_USER,
+      GIT_COMMITTER_NAME: 'Clean',
+      GIT_COMMITTER_EMAIL: NOREPLY_USER,
+    });
+
+    // A personal address on a branch that is NOT checked out.
+    execFileSync('git', ['checkout', '-q', '-b', 'stale'], { cwd: dir });
+    commitWithIdentity(dir, {
+      GIT_AUTHOR_NAME: 'Ada',
+      GIT_AUTHOR_EMAIL: ['ada', 'example.com'].join('@'),
+      GIT_COMMITTER_NAME: 'Ada',
+      GIT_COMMITTER_EMAIL: ['ada', 'example.com'].join('@'),
+    });
+    execFileSync('git', ['checkout', '-q', 'main'], { cwd: dir });
+
+    assert.deepEqual(
+      scanIdentities(readIdentities(dir), []),
+      [],
+      'a bad identity on a non-HEAD branch must not fail the scan',
+    );
+
+    // And the scope is a choice, not an accident: point it at that branch and
+    // the same commit is found. Without this half, a readIdentities that
+    // silently returned nothing at all would also pass the assertion above.
+    const onStale = scanIdentities(readIdentities(dir, 'stale'), []);
+    // Two findings, not one: the address sits in both the author-email and the
+    // committer-email field, and every field is checked independently.
+    assert.equal(onStale.length, 2, 'the same commit must be found when stale IS the scanned ref');
+    assert.deepEqual(onStale.map((f) => f.line).sort(), ['author-email', 'committer-email']);
+    assert.ok(onStale.every((f) => f.rule === 'identity-email'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an identity finding names the ref it came from, not just a bare sha', () => {
+  // Findings print no matched text by design, so without the ref the reader is
+  // left with seven hex characters and no way to tell which history they are in.
+  const dir = identityRepo();
+  try {
+    commitWithIdentity(dir, {
+      GIT_AUTHOR_NAME: 'Ada',
+      GIT_AUTHOR_EMAIL: ['ada', 'example.com'].join('@'),
+      GIT_COMMITTER_NAME: 'Ada',
+      GIT_COMMITTER_EMAIL: ['ada', 'example.com'].join('@'),
+    });
+    const findings = scanIdentities(readIdentities(dir), []);
+    assert.ok(findings.length > 0, 'the planted identity must be found');
+    assert.match(
+      findings[0].file,
+      /^commit [0-9a-f]{7} on HEAD$/,
+      'the finding must name both the commit and the ref that was scanned',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

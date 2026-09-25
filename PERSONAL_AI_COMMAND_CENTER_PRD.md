@@ -1691,15 +1691,15 @@ Description: Add automated validation for formatting, linting, type checking, un
 
 Acceptance criteria:
 
-1. [ ] One command runs the complete local validation.
+1. [x] One command runs the complete local validation.
 
-2. [ ] CI uses a supported Node.js LTS version.
+2. [x] CI uses a supported Node.js LTS version.
 
-3. [ ] CI caches dependencies without caching secrets or mutable database state.
+3. [x] CI caches dependencies without caching secrets or mutable database state.
 
-4. [ ] Test reports and coverage artifacts are retained.
+4. [x] Test reports and coverage artifacts are retained.
 
-5. [ ] Browser failures retain screenshots and traces.
+5. [x] Browser failures retain screenshots and traces.
 
 6. [ ] CI blocks merging when any required check fails.
 
@@ -1707,9 +1707,9 @@ Test requirements:
 
 1. [ ] A deliberately failing fixture proves CI blocks.
 
-2. [ ] A clean validation run passes.
+2. [x] A clean validation run passes.
 
-3. [ ] CI configuration contains no credential literal.
+3. [x] CI configuration contains no credential literal.
 
 ```json
 {

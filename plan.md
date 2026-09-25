@@ -1,17 +1,28 @@
 # Plan
 
-Last updated: 2026-09-24
+Last updated: 2026-09-25
 
 Full phase plan: `docs/superpowers/plans/2026-09-24-personal-ai-command-center.md`
 
-Active goal: Phase 0 (discovery, decisions, repository) is complete and merged. Phase 1 (foundation, TASK_002 to TASK_005) is under way: TASK_002 is done.
+Active goal: Phase 1 (foundation, TASK_002 to TASK_005). TASK_001 and TASK_002 are done and merged, and every issue labelled `bug` is closed. Next is TASK_003.
 
 Current task: TASK_003
 
-TASK_002 is complete on branch `phase-1/foundation` (2026-09-24). TASK_003 has not started. It needs an owner decision about branch protection, see Open items below.
+## Next steps (resume here)
+
+State on 2026-09-25: `main` is the only branch, locally and on the remote, and it is clean. Every check passes on it: 28 Vitest tests, 47 repository tests, lint, type-check, format check, the full-tree and full-history gitleaks scans (26 commits), and `npm audit`. To confirm before starting, run `nvm use`, `git pull`, `npm run test:repo`, `npm test`. The working rules and shell pitfalls are in `research.md`. Read the last entry of `progress.md` first.
+
+1. **Ask the owner one question before anything else: branch protection.** GitHub cannot enforce "CI blocks merging" on this private repository's plan (the API returns HTTP 403). Options: make the repository public, upgrade the plan, or use a local pre-push hook. The pre-push hook is the cheapest, but it only guards this machine and does not stop a merge on GitHub. The owner decides. Record the answer in `research.md`.
+2. **TASK_003, continuous integration and validation commands.** First write its bite-sized TDD plan at `docs/superpowers/plans/<date>-task-003-ci-validation.md`, in the style of the TASK_002 plan in the same folder (tests first, exact files, interfaces, mutation checks). Scope from the PRD: one `npm run validate` that runs format check, lint, type-check, unit tests, integration tests, coverage, build, a Playwright smoke test and the secret scan. CI on Node 24 LTS, caching dependencies but never secrets or mutable database state. Reports and coverage retained, and screenshots and traces kept when a browser test fails. A deliberately failing fixture must prove CI blocks, and a test must show the CI config holds no credential literal.
+   - Carry-ins already decided: pin `actions/checkout` and `actions/setup-node` to commit SHAs. Run `npm ci`, type-check, lint, Vitest and the builds in CI (today CI runs only the repository tests and scans). Coverage thresholds are 80 percent overall, 85 percent for provider adapters and 90 percent for security modules and state machines. There are no adapters yet, so set the overall threshold now and add the per-area thresholds with their packages. Install Playwright browsers in CI (`npx playwright install --with-deps chromium`). It needs a first smoke test against the built web app, which today is only a title. Cache each `dist` together with its build info, never one without the other. Keep the pinned, checksum-verified gitleaks steps and the zero-commits guard exactly as they are.
+   - Open enhancement issues that overlap TASK_003: #7 (the CI permissions test misses job-level blocks and other workflow files, and TASK_003 adds a second workflow) and #13 (build tests run inside `npm test` under a 30 second timeout, so split them into a slower project). Also open and not urgent: #14 (web tsconfig does not extend the base, ESLint skips the guard call site), #12 (the VITE_ guard has no allowlist), #15 (PORT rejects 0), #6 (lockfile exclusion by exact path).
+3. **TASK_004, shared contracts and state machines.** The exact names and the proposed transition tables are in the Phase 1 section of `docs/superpowers/plans/2026-09-24-personal-ai-command-center.md`. Table-driven tests must accept every valid transition and reject every other pair.
+4. **TASK_005, SQLite storage.** better-sqlite3 13.0.1 is verified (prebuilt binary, FTS5, WAL, online backup). Do not approve its npm install script. Confirm the Linux CI runner loads it from the prebuilt binary.
+5. **Then Phase 2 onward,** following the phase plan and the task graph below. At the start of each phase write a just-in-time bite-sized TDD plan file. Stop at every owner gate below.
 
 ## Recently completed
 
+- Bug fixes from the issue tracker, merged 2026-09-25: #3 (CI gitleaks scanned zero commits), #4 and #5 (source protection scan rules), #10 (env exposure test could not see exposure), #11 (stale `tsc -b` state, plus a `clean` script). All closed.
 - TASK_002 Monorepo scaffold and pinned toolchain (2026-09-24)
 - TASK_001 Source separated repository and project memory (2026-09-24)
 
@@ -44,7 +55,7 @@ Do not pass any of these without the owner's explicit approval.
 3. Second provider and tmux compatibility decisions: Phase 6 and Phase 7 gates.
 4. Device pairing design approval before TASK_013.
 5. Branch protection is unavailable on this private repository's plan (the API returns HTTP 403), so "CI blocks merging" (TASK_003 criterion 6) needs an owner decision: make the repository public, upgrade the plan, or use a local pre-push hook.
-6. Remaining CI hardening (pin first-party actions, run the toolchain checks in CI) and the one remaining scanner gap (lockfile exclusion), listed in `research.md` under Follow-ups and known gaps.
+6. Remaining CI hardening (pin first-party actions, run the toolchain checks in CI) and the one remaining scanner gap (lockfile exclusion), listed in `research.md` under Follow-ups and known gaps. Open enhancement issues are listed in Next steps.
 7. The `~/Downloads/1-git` allowed root is temporary.
 8. Claude Code behavior is unverified. Flags, streaming, permission prompts, isolation, attachments and transcripts come from the TASK_010 documentation spike.
 

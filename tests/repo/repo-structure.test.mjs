@@ -108,6 +108,31 @@ test('memory files contain no stray literal backslash-n from a scripted edit', (
   }
 });
 
+test('plan.md tells a returning session where to resume', () => {
+  const text = read('plan.md');
+  assert.match(text, /^## Next steps \(resume here\)$/m);
+  const section = text.split(/^## Next steps \(resume here\)$/m)[1]?.split(/^## /m)[0] ?? '';
+  const current = text.match(/^Current task:\s*(TASK_\d{3})\s*$/m)?.[1];
+  assert.ok(current, 'plan.md has no current task');
+  assert.ok(section.includes(current), `the resume section must mention ${current}`);
+  assert.match(
+    section,
+    /branch protection/i,
+    'the open owner decision must be in the resume section',
+  );
+});
+
+test('research.md does not claim stacked pull requests retarget automatically', () => {
+  const text = read('research.md');
+  assert.doesNotMatch(text, /(?<!not )retarget automatically/i, 'the false positive claim is back');
+  assert.match(text, /gh pr edit <child> --base main/, 'the correct remedy must be written down');
+  assert.match(
+    text.split(/^## Failed approaches$/m)[1] ?? '',
+    /stacked pull request/i,
+    'the mistake must also be recorded under Failed approaches',
+  );
+});
+
 test('progress.md has a dated entry', () => {
   assert.match(read('progress.md'), /^##\s+\d{4}-\d{2}-\d{2}/m);
 });

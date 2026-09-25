@@ -75,3 +75,21 @@ CI evidence for the TASK_002 pull request: the `scan` job passed in 9 seconds (w
 The owner decided not to hand the build to another agent, so the handoff pull request (#8) was closed unmerged and `HANDOFF.md` is not part of the repository. The durable parts of it moved to where the project memory belongs: the owner gates and open items are now sections of `plan.md`, and the environment notes, the branch protection finding, the deferred CI hardening and the scanner rule gaps are sections of `research.md`. Earlier entries in this file that mention the handoff document are history and are left as written.
 
 Test first: the three handoff tests were replaced by three tests requiring those sections and forbidding any stale reference to a handoff document. They failed against the old files (3 failures), then passed after the move. `npm run test:repo` is 31 of 31.
+
+
+## 2026-09-24 (bug fixes from the issue tracker, pull request 3)
+
+### Build tooling (#10, #11)
+
+Both reproduced. #11: `rm -rf` of every `dist`, then `npm test`, gave 4 failed and 20 passed with "Failed to resolve entry for package", and deleting only the three `tsbuildinfo` files restored 24 of 24. #10: with `envPrefix` widened to include `QUACK_` and the guard call removed, the canary test still passed.
+
+**Correction to earlier wording (issue 10 acceptance).** The TASK_002 entry and pull request 9 said the canary test proves a server-only value never reaches the web bundle. It does not. While no source file reads `import.meta.env`, Vite inlines no environment value under any configuration, so the test could only catch a leak through `define`, which is what its mutation exercised. The guard test (a secret-looking `VITE_` variable fails the build) was and is load-bearing, so TASK_002 criterion 7 stands.
+
+I also checked the issue's suggested fix before using it: a keyed reference such as `import.meta.env.MODE` inlines only that key, and widening `envPrefix` stayed invisible (canary count 0). A bare `import.meta.env` reference inlines everything exposed (canary count 1). So the fix is a probe entry that reads the whole object, built with the real config.
+
+Test first. For #11 the two new rebuild tests failed on the old config (a rebuild after deleting `dist`, and `npm run clean`, which did not exist). For #10 the probe tests were run against the deliberately broken config: the old canary test passed, the new probe test failed on the leaked canary, and on the restored config the probes pass. The probe has a positive control so it cannot pass vacuously. The fixes: `tsBuildInfoFile` set to `${configDir}/dist/.tsbuildinfo` in `tsconfig.base.json`, and a `clean` script.
+
+After the fix, the issue's literal reproduction (`rm -rf` of every `dist`, then `npm test`) passes 28 of 28 with no build info left behind. `npm run clean` works from the previously broken state.
+
+Slip recorded as data: the fix commit was made while lint was failing, because my check and my commit were not chained. Typed lint rules were being applied to the plain JavaScript probe fixture, which is not in the ESLint tsconfig. A follow-up commit ignores that fixture directory. Lint, type-check, format, all tests, both repository scans and audit pass.
+\n

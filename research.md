@@ -54,7 +54,7 @@ In a throwaway directory on Node.js 24.21.0 arm64, better-sqlite3 13.0.3 install
 - Server binds to loopback. Remote access, when built, is Cloudflare Access at the edge plus an application session at the origin.
 - Working directories are restricted to configured roots, resolved through symlinks. Roots are changed locally only, and no API route edits them.
 - Device pairing design: not yet written. It is written here and approved by the owner before TASK_013 starts. The planned shape is a single use, short lived pairing code written to a file with owner-only permissions at startup, exchanged for an HTTP only, secure, same site, expiring and revocable cookie backed by an `app_sessions` table.
-- Secret scanning: gitleaks runs in CI through the `gitleaks/gitleaks-action` GitHub Action, referenced by major version tag. Task 003 pins third party actions to commit SHAs.
+- Secret scanning: gitleaks runs in CI through the `gitleaks/gitleaks-action` GitHub Action, referenced by major version tag. The workflow token is read only (`contents: read`, `pull-requests: read`) and gitleaks PR comments are disabled. Task 003 pins third party actions to commit SHAs and adds full-tree and full-history scanning so a merge to `main` is scanned.
 - Source protection: `scripts/source-protection-scan.mjs` fails on home directory paths, email addresses other than reserved example domains, and any entry in the local, gitignored `.source-protection-denylist`. It prints file, line and rule, never the matched text.
 
 ## Known provider limitations and unknowns
@@ -83,5 +83,7 @@ Recheck before each adapter. All are listed in PRD section 16.
 - Cloudflare Access self hosted app: https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/
 
 ## Failed approaches
+
+- 2026-09-24: A workflow `permissions: contents: read` block makes `gitleaks/gitleaks-action@v2` crash with HTTP 403 on `pull_request` events, because a permissions block sets every unlisted scope to none and the action lists the PR's commits. The fix is `pull-requests: read`. A passing `push` run does not prove the pull request path works, because it never calls that API. The action's PR comments need `pull-requests: write`, so they are disabled with `GITLEAKS_ENABLE_COMMENTS: "false"` to keep the token read-only.
 
 - 2026-09-24: `node --test tests/repo/` (a directory argument) fails on Node 24 with a module-not-found error. Use a quoted glob such as `node --test "tests/repo/*.test.mjs"`.

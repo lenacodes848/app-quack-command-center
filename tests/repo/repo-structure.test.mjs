@@ -34,7 +34,10 @@ test('project memory files are not empty', () => {
 
 test('discovery.md carries the source separation rule', () => {
   const text = read('discovery.md');
-  assert.match(text, /must not read, import, copy, translate, reconstruct, or paraphrase any private command center source/i);
+  assert.match(
+    text,
+    /must not read, import, copy, translate, reconstruct, or paraphrase any private command center source/i,
+  );
 });
 
 test('discovery.md records host OS, installed providers and the first release definition', () => {
@@ -76,6 +79,29 @@ test('excluded tasks are recorded as not_applicable with a governing decision', 
   }
 });
 
+test('plan.md records the owner gates and open items that stop the build', () => {
+  const text = read('plan.md');
+  assert.match(text, /^## Owner gates$/m);
+  assert.match(text, /^## Open items$/m);
+  for (const gate of [/device pairing design/i, /public hostname/i, /second provider/i, /tmux/i]) {
+    assert.match(text, gate, `plan.md owner gates must mention ${String(gate)}`);
+  }
+});
+
+test('research.md records environment notes and known follow-ups', () => {
+  const text = read('research.md');
+  assert.match(text, /^## Environment notes$/m);
+  assert.match(text, /^## Follow-ups and known gaps$/m);
+  assert.match(text, /branch protection/i);
+  assert.match(text, /nvm use/);
+});
+
+test('no stale reference to a handoff document remains', () => {
+  for (const f of ['plan.md', 'research.md', 'discovery.md']) {
+    assert.doesNotMatch(read(f), /HANDOFF\.md/, `${f} still references HANDOFF.md`);
+  }
+});
+
 test('progress.md has a dated entry', () => {
   assert.match(read('progress.md'), /^##\s+\d{4}-\d{2}-\d{2}/m);
 });
@@ -95,7 +121,7 @@ test('CI grants the gitleaks action the pull-requests scope it needs on pull_req
 });
 
 test('CI does not ask gitleaks to post PR comments, which would need a write scope', () => {
-  assert.match(read('.github/workflows/secrets.yml'), /GITLEAKS_ENABLE_COMMENTS:\s*"?false"?/);
+  assert.match(read('.github/workflows/secrets.yml'), /GITLEAKS_ENABLE_COMMENTS:\s*["']false["']/);
 });
 
 test('CI runs the same npm scripts a developer runs locally', () => {
@@ -114,6 +140,9 @@ test('CI push trigger is limited to main so branch pushes do not run twice', () 
 test('local-only files are gitignored', () => {
   const ignore = read('.gitignore');
   for (const entry of ['node_modules', '.env', '.source-protection-denylist']) {
-    assert.ok(ignore.split('\n').includes(entry) || ignore.includes(`${entry}\n`), `.gitignore must list ${entry}`);
+    assert.ok(
+      ignore.split('\n').includes(entry) || ignore.includes(`${entry}\n`),
+      `.gitignore must list ${entry}`,
+    );
   }
 });

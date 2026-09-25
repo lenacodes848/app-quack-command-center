@@ -182,3 +182,28 @@ test('local-only files are gitignored', () => {
     );
   }
 });
+
+test('unit and integration tests are separate Vitest projects with separate timeouts', () => {
+  const config = read('vitest.config.ts');
+  assert.match(config, /name:\s*'unit'/, 'a project named unit must exist');
+  assert.match(config, /name:\s*'integration'/, 'a project named integration must exist');
+
+  const scripts = JSON.parse(read('package.json')).scripts;
+  assert.equal(scripts.test, 'vitest run --project unit');
+  assert.equal(scripts['test:integration'], 'vitest run --project integration');
+  assert.match(
+    scripts['test:coverage'],
+    /--coverage/,
+    'test:coverage must actually collect coverage',
+  );
+});
+
+test('coverage thresholds are set and cannot silently drop', () => {
+  const config = read('vitest.config.ts');
+  const thresholds = config.match(/thresholds:\s*\{[^}]*\}/s)?.[0];
+  assert.ok(thresholds, 'coverage.thresholds must be configured');
+  for (const metric of ['lines', 'functions', 'branches', 'statements']) {
+    const value = Number(thresholds.match(new RegExp(`${metric}:\\s*(\\d+)`))?.[1]);
+    assert.ok(value >= 80, `${metric} coverage threshold must be at least 80, found ${value}`);
+  }
+});

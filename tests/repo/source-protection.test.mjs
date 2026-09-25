@@ -74,7 +74,10 @@ test('a clean file produces no findings', () => {
 test('loadDenylist ignores comments and blank lines and tolerates a missing file', () => {
   const dir = fixture({ '.source-protection-denylist': '# comment\n\nalpha.corp\n  beta  \n' });
   try {
-    assert.deepEqual(loadDenylist(join(dir, '.source-protection-denylist')), ['alpha.corp', 'beta']);
+    assert.deepEqual(loadDenylist(join(dir, '.source-protection-denylist')), [
+      'alpha.corp',
+      'beta',
+    ]);
     assert.deepEqual(loadDenylist(join(dir, 'missing')), []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -82,6 +85,9 @@ test('loadDenylist ignores comments and blank lines and tolerates a missing file
 });
 
 test('every tracked file in this repository passes the source protection scan', () => {
-  const out = execFileSync('node', ['scripts/source-protection-scan.mjs'], { cwd: root, encoding: 'utf8' });
+  const out = execFileSync('node', ['scripts/source-protection-scan.mjs'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
   assert.match(out, /source protection scan passed/i);
 });

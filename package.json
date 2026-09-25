@@ -2,13 +2,39 @@
   "name": "app-quack-command-center",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "description": "Quack Command Center: a local-first, single-owner web dashboard for coding agents.",
   "engines": {
     "node": ">=24.21.0 <25"
   },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
+    "build": "npm run build:server && npm run build:web",
+    "build:server": "tsc -b apps/server",
+    "build:web": "npm run build --workspace @quack/web",
+    "typecheck": "tsc -b && tsc -p apps/web",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
     "test:repo": "node --test \"tests/repo/*.test.mjs\"",
     "scan:source": "node scripts/source-protection-scan.mjs",
     "scan:secrets": "gitleaks dir . --no-banner --redact"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.13.6",
+    "@vitest/coverage-v8": "4.1.11",
+    "eslint": "10.11.0",
+    "prettier": "3.9.9",
+    "typescript": "6.0.2",
+    "typescript-eslint": "8.70.1",
+    "vitest": "4.1.11"
+  },
+  "overrides": {
+    "vite": "8.1.5"
   }
 }

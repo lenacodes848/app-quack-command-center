@@ -1,0 +1,10 @@
+{
+  "name": "@quack/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@quack/config": "0.0.0",
+    "@quack/contracts": "0.0.0"
+  }
+}

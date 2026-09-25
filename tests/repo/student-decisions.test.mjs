@@ -52,7 +52,10 @@ test('at least one of Claude Code or Codex is selected', () => {
 test('first release definition paragraph is written', () => {
   const s = sections().find((x) => x.title.startsWith('14.'));
   assert.ok(s, 'section 14 missing');
-  const paragraph = s.body.split('\n').filter((l) => l.trim() && !l.startsWith('Write one paragraph')).join(' ');
+  const paragraph = s.body
+    .split('\n')
+    .filter((l) => l.trim() && !l.startsWith('Write one paragraph'))
+    .join(' ');
   assert.ok(paragraph.length > 300, 'first release paragraph is missing or too short');
 });
 

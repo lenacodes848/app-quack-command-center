@@ -44,7 +44,7 @@ Do not pass any of these without the owner's explicit approval.
 3. Second provider and tmux compatibility decisions: Phase 6 and Phase 7 gates.
 4. Device pairing design approval before TASK_013.
 5. Branch protection is unavailable on this private repository's plan (the API returns HTTP 403), so "CI blocks merging" (TASK_003 criterion 6) needs an owner decision: make the repository public, upgrade the plan, or use a local pre-push hook.
-6. Scanner rule gaps and CI hardening, listed in `research.md` under Follow-ups and known gaps.
+6. Remaining CI hardening (pin first-party actions, run the toolchain checks in CI) and the one remaining scanner gap (lockfile exclusion), listed in `research.md` under Follow-ups and known gaps.
 7. The `~/Downloads/1-git` allowed root is temporary.
 8. Claude Code behavior is unverified. Flags, streaming, permission prompts, isolation, attachments and transcripts come from the TASK_010 documentation spike.
 

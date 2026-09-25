@@ -117,17 +117,47 @@ test('a secrets scanner runs in CI', () => {
   assert.match(wf, /gitleaks/i);
 });
 
-test('CI grants the gitleaks action the pull-requests scope it needs on pull_request events', () => {
+test('CI keeps the workflow token read-only', () => {
   const wf = read('.github/workflows/secrets.yml');
-  const perms = wf.match(/^permissions:\n((?:[ ]{2}[a-z-]+:\s*\w+\n)+)/m);
-  assert.ok(perms, 'workflow must declare a permissions block');
-  assert.match(perms[1], /^ {2}contents:\s*read$/m);
-  assert.match(perms[1], /^ {2}pull-requests:\s*read$/m);
-  assert.doesNotMatch(perms[1], /:\s*write/, 'no write scopes: least privilege');
+  assert.match(wf, /^permissions:\n {2}contents:\s*read$/m);
+  assert.doesNotMatch(wf, /:\s*write\b/, 'no write scopes anywhere: least privilege');
 });
 
-test('CI does not ask gitleaks to post PR comments, which would need a write scope', () => {
-  assert.match(read('.github/workflows/secrets.yml'), /GITLEAKS_ENABLE_COMMENTS:\s*["']false["']/);
+test('CI does not use the gitleaks action, whose commit range can be empty', () => {
+  assert.doesNotMatch(
+    read('.github/workflows/secrets.yml'),
+    /gitleaks\/gitleaks-action/,
+    'the action scans a commit range that is empty after a merge-commit merge, yet reports success',
+  );
+});
+
+test('CI installs a pinned gitleaks and verifies its checksum before running it', () => {
+  const wf = read('.github/workflows/secrets.yml');
+  const version = wf.match(/GITLEAKS_VERSION:\s*(\d+\.\d+\.\d+)/)?.[1];
+  assert.ok(version, 'workflow must pin GITLEAKS_VERSION');
+  assert.match(wf, /GITLEAKS_LINUX_X64_SHA256:\s*[0-9a-f]{64}\b/);
+  assert.match(wf, /sha256sum --check --strict/);
+  const recorded = read('research.md').match(/gitleaks (\d+\.\d+\.\d+)/)?.[1];
+  assert.equal(version, recorded, 'CI must use the same gitleaks version research.md records');
+});
+
+test('CI scans the full working tree and the full history with the local scripts', () => {
+  const wf = read('.github/workflows/secrets.yml');
+  assert.match(wf, /fetch-depth:\s*0/, 'history scan needs the full clone');
+  assert.match(wf, /run:\s*npm run scan:secrets$/m);
+  assert.match(wf, /run:\s*npm run scan:secrets:history$/m);
+  const scripts = JSON.parse(read('package.json')).scripts;
+  assert.equal(scripts['scan:secrets'], 'gitleaks dir . --no-banner --redact');
+  assert.equal(scripts['scan:secrets:history'], 'node scripts/scan-history.mjs');
+});
+
+test('the gitleaks install step runs before the tests that need it', () => {
+  const wf = read('.github/workflows/secrets.yml');
+  const install = wf.indexOf('Install gitleaks');
+  const tests = wf.indexOf('npm run test:repo');
+  assert.ok(install >= 0, 'workflow must have an "Install gitleaks" step');
+  assert.ok(tests >= 0, 'workflow must run npm run test:repo');
+  assert.ok(install < tests, 'gitleaks must be installed before the tests that call it');
 });
 
 test('CI runs the same npm scripts a developer runs locally', () => {

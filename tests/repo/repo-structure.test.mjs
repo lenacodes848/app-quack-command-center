@@ -255,8 +255,8 @@ const VALIDATE_STEPS = [
   'typecheck',
   'test:repo',
   'test:coverage',
-  'build',
   'test:integration',
+  'build',
   'test:e2e',
   'scan:source',
   'scan:secrets',
@@ -284,20 +284,53 @@ test('validate runs the cheap checks before the expensive ones', () => {
   assert.ok(at('typecheck') < at('test:coverage'), 'type-check before unit tests');
 });
 
-test('validate runs build immediately before test:e2e, with nothing in between', () => {
+const STEP_PATTERN = /npm run [\w:-]+/g;
+
+function validateSteps(validate) {
+  return [...validate.matchAll(STEP_PATTERN)];
+}
+
+test('validate joins every step with &&, so an early failure stops the run', () => {
   const validate = JSON.parse(read('package.json')).scripts.validate;
-  const buildAt = validate.indexOf('npm run build');
-  const e2eAt = validate.indexOf('npm run test:e2e');
-  assert.ok(buildAt >= 0, 'validate must run build');
-  assert.ok(e2eAt >= 0, 'validate must run test:e2e');
-  assert.ok(buildAt < e2eAt, 'the browser test needs the build to exist first');
-  const between = validate.slice(buildAt + 'npm run build'.length, e2eAt);
-  assert.doesNotMatch(
+  const steps = validateSteps(validate);
+  assert.equal(
+    steps.length,
+    VALIDATE_STEPS.length,
+    `validate must contain exactly ${VALIDATE_STEPS.length} npm run steps, found ${steps.length}`,
+  );
+  for (let i = 0; i < steps.length - 1; i += 1) {
+    const between = validate.slice(steps[i].index + steps[i][0].length, steps[i + 1].index).trim();
+    assert.equal(
+      between,
+      '&&',
+      `"${steps[i][0]}" and "${steps[i + 1][0]}" must be joined by exactly &&, found "${between}" instead: ` +
+        'any other operator (such as ; or & or ||) lets an earlier failure continue instead of stopping the run, ' +
+        'silently reporting later steps as green even though an earlier one failed',
+    );
+  }
+});
+
+test('validate runs build immediately before test:e2e, joined by exactly &&, with nothing else between them', () => {
+  const validate = JSON.parse(read('package.json')).scripts.validate;
+  const steps = validateSteps(validate);
+  const buildIndex = steps.findIndex((m) => m[0] === 'npm run build');
+  const e2eIndex = steps.findIndex((m) => m[0] === 'npm run test:e2e');
+  assert.ok(buildIndex >= 0, 'validate must run build');
+  assert.ok(e2eIndex >= 0, 'validate must run test:e2e');
+  assert.equal(
+    e2eIndex,
+    buildIndex + 1,
+    'build must be the step immediately before test:e2e, with no other npm-run step between them',
+  );
+  const between = validate
+    .slice(steps[buildIndex].index + steps[buildIndex][0].length, steps[e2eIndex].index)
+    .trim();
+  assert.equal(
     between,
-    /npm run/,
-    'build must be immediately followed by test:e2e with no step in between: ' +
-      'any step placed between them (for example test:integration, which deletes ' +
-      'apps/web/dist to test rebuild-from-clean behavior) can delete apps/web/dist ' +
-      'and leave the browser test with nothing to serve',
+    '&&',
+    'build and test:e2e must be joined by exactly && with nothing else between them: any command in ' +
+      'between (not just another npm-run step, e.g. a bare `rm -rf apps/web/dist` or a raw ' +
+      '`npx vitest run --project integration`) can still delete apps/web/dist and leave the browser test ' +
+      'with nothing to serve',
   );
 });

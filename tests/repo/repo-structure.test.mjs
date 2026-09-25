@@ -282,5 +282,22 @@ test('validate runs the cheap checks before the expensive ones', () => {
   assert.ok(at('format:check') < at('lint'), 'format check is cheapest, it goes first');
   assert.ok(at('lint') < at('typecheck'), 'lint before type-check');
   assert.ok(at('typecheck') < at('test:coverage'), 'type-check before unit tests');
-  assert.ok(at('build') < at('test:e2e'), 'the browser test needs the build to exist first');
+});
+
+test('validate runs build immediately before test:e2e, with nothing in between', () => {
+  const validate = JSON.parse(read('package.json')).scripts.validate;
+  const buildAt = validate.indexOf('npm run build');
+  const e2eAt = validate.indexOf('npm run test:e2e');
+  assert.ok(buildAt >= 0, 'validate must run build');
+  assert.ok(e2eAt >= 0, 'validate must run test:e2e');
+  assert.ok(buildAt < e2eAt, 'the browser test needs the build to exist first');
+  const between = validate.slice(buildAt + 'npm run build'.length, e2eAt);
+  assert.doesNotMatch(
+    between,
+    /npm run/,
+    'build must be immediately followed by test:e2e with no step in between: ' +
+      'any step placed between them (for example test:integration, which deletes ' +
+      'apps/web/dist to test rebuild-from-clean behavior) can delete apps/web/dist ' +
+      'and leave the browser test with nothing to serve',
+  );
 });

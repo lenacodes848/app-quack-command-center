@@ -12,6 +12,7 @@
     "declaration": true,
     "composite": true,
     "skipLibCheck": false,
-    "types": ["node"]
+    "types": ["node"],
+    "tsBuildInfoFile": "${configDir}/dist/.tsbuildinfo"
   }
 }

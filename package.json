@@ -16,6 +16,7 @@
     "build:server": "tsc -b apps/server",
     "build:web": "npm run build --workspace @quack/web",
     "typecheck": "tsc -b && tsc -p apps/web",
+    "clean": "tsc -b --clean && rm -rf apps/*/dist packages/*/dist apps/*/tsconfig.tsbuildinfo packages/*/tsconfig.tsbuildinfo",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

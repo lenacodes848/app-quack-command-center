@@ -35,7 +35,10 @@ test('project memory files are not empty', () => {
 
 test('discovery.md carries the source separation rule', () => {
   const text = read('discovery.md');
-  assert.match(text, /must not read, import, copy, translate, reconstruct, or paraphrase any private command center source/i);
+  assert.match(
+    text,
+    /must not read, import, copy, translate, reconstruct, or paraphrase any private command center source/i,
+  );
 });
 
 test('discovery.md records host OS, installed providers and the first release definition', () => {
@@ -90,7 +93,11 @@ test('HANDOFF.md gives a new agent state, next steps, gates and working rules', 
     'Gotchas and lessons',
     'Open items',
   ]) {
-    assert.match(text, new RegExp(`^##\\s+.*${heading}`, 'm'), `HANDOFF.md is missing the "${heading}" section`);
+    assert.match(
+      text,
+      new RegExp(`^##\\s+.*${heading}`, 'm'),
+      `HANDOFF.md is missing the "${heading}" section`,
+    );
   }
 });
 
@@ -101,10 +108,26 @@ test('HANDOFF.md points at the task that plan.md says is current', () => {
 });
 
 test('HANDOFF.md links only to files that exist', () => {
-  const links = [...read('HANDOFF.md').matchAll(/`((?:[\w.-]+\/)*[\w.-]+\.(?:md|mjs|yml|json))`/g)].map((m) => m[1]);
-  const missing = links.filter((p) => !p.includes('*') && !p.startsWith('docs/superpowers/plans/YYYY') && !existsSync(join(root, p)));
-  const allowedFuture = new Set(['.source-protection-denylist', 'package-lock.json', 'tsconfig.base.json', 'providers.registry.json']);
-  const real = missing.filter((p) => !allowedFuture.has(p) && !/^(apps|packages|config|tests\/(contracts|integration|security|browser))\//.test(p));
+  const links = [
+    ...read('HANDOFF.md').matchAll(/`((?:[\w.-]+\/)*[\w.-]+\.(?:md|mjs|yml|json))`/g),
+  ].map((m) => m[1]);
+  const missing = links.filter(
+    (p) =>
+      !p.includes('*') &&
+      !p.startsWith('docs/superpowers/plans/YYYY') &&
+      !existsSync(join(root, p)),
+  );
+  const allowedFuture = new Set([
+    '.source-protection-denylist',
+    'package-lock.json',
+    'tsconfig.base.json',
+    'providers.registry.json',
+  ]);
+  const real = missing.filter(
+    (p) =>
+      !allowedFuture.has(p) &&
+      !/^(apps|packages|config|tests\/(contracts|integration|security|browser))\//.test(p),
+  );
   assert.deepEqual(real, [], `HANDOFF.md references missing files: ${real.join(', ')}`);
 });
 
@@ -127,7 +150,7 @@ test('CI grants the gitleaks action the pull-requests scope it needs on pull_req
 });
 
 test('CI does not ask gitleaks to post PR comments, which would need a write scope', () => {
-  assert.match(read('.github/workflows/secrets.yml'), /GITLEAKS_ENABLE_COMMENTS:\s*"?false"?/);
+  assert.match(read('.github/workflows/secrets.yml'), /GITLEAKS_ENABLE_COMMENTS:\s*["']false["']/);
 });
 
 test('CI runs the same npm scripts a developer runs locally', () => {
@@ -146,6 +169,9 @@ test('CI push trigger is limited to main so branch pushes do not run twice', () 
 test('local-only files are gitignored', () => {
   const ignore = read('.gitignore');
   for (const entry of ['node_modules', '.env', '.source-protection-denylist']) {
-    assert.ok(ignore.split('\n').includes(entry) || ignore.includes(`${entry}\n`), `.gitignore must list ${entry}`);
+    assert.ok(
+      ignore.split('\n').includes(entry) || ignore.includes(`${entry}\n`),
+      `.gitignore must list ${entry}`,
+    );
   }
 });

@@ -102,6 +102,12 @@ test('no stale reference to a handoff document remains', () => {
   }
 });
 
+test('memory files contain no stray literal backslash-n from a scripted edit', () => {
+  for (const f of ['discovery.md', 'research.md', 'plan.md', 'progress.md']) {
+    assert.doesNotMatch(read(f), /\\n/, `${f} contains a literal backslash-n sequence`);
+  }
+});
+
 test('progress.md has a dated entry', () => {
   assert.match(read('progress.md'), /^##\s+\d{4}-\d{2}-\d{2}/m);
 });

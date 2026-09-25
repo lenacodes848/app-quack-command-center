@@ -293,3 +293,72 @@ test('readIdentities fails loudly with a bare message, never printing raw git ou
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('the identity scan covers HEAD only, so an unrelated branch cannot fail the build', () => {
+  // Pins the fix to a real operational defect. When this scanned `--all`, a
+  // stale local branch or a leftover refs/remotes/pr/* produced a finding with
+  // no relationship to the code under review — and because findings never
+  // print matched text, the message was near-undiagnosable. `--all` is exactly
+  // the change someone makes in good faith believing it is more thorough,
+  // which is how it got there the first time.
+  const dir = identityRepo();
+  try {
+    commitWithIdentity(dir, {
+      GIT_AUTHOR_NAME: 'Clean',
+      GIT_AUTHOR_EMAIL: NOREPLY_USER,
+      GIT_COMMITTER_NAME: 'Clean',
+      GIT_COMMITTER_EMAIL: NOREPLY_USER,
+    });
+
+    // A personal address on a branch that is NOT checked out.
+    execFileSync('git', ['checkout', '-q', '-b', 'stale'], { cwd: dir });
+    commitWithIdentity(dir, {
+      GIT_AUTHOR_NAME: 'Ada',
+      GIT_AUTHOR_EMAIL: ['ada', 'example.com'].join('@'),
+      GIT_COMMITTER_NAME: 'Ada',
+      GIT_COMMITTER_EMAIL: ['ada', 'example.com'].join('@'),
+    });
+    execFileSync('git', ['checkout', '-q', 'main'], { cwd: dir });
+
+    assert.deepEqual(
+      scanIdentities(readIdentities(dir), []),
+      [],
+      'a bad identity on a non-HEAD branch must not fail the scan',
+    );
+
+    // And the scope is a choice, not an accident: point it at that branch and
+    // the same commit is found. Without this half, a readIdentities that
+    // silently returned nothing at all would also pass the assertion above.
+    const onStale = scanIdentities(readIdentities(dir, 'stale'), []);
+    // Two findings, not one: the address sits in both the author-email and the
+    // committer-email field, and every field is checked independently.
+    assert.equal(onStale.length, 2, 'the same commit must be found when stale IS the scanned ref');
+    assert.deepEqual(onStale.map((f) => f.line).sort(), ['author-email', 'committer-email']);
+    assert.ok(onStale.every((f) => f.rule === 'identity-email'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an identity finding names the ref it came from, not just a bare sha', () => {
+  // Findings print no matched text by design, so without the ref the reader is
+  // left with seven hex characters and no way to tell which history they are in.
+  const dir = identityRepo();
+  try {
+    commitWithIdentity(dir, {
+      GIT_AUTHOR_NAME: 'Ada',
+      GIT_AUTHOR_EMAIL: ['ada', 'example.com'].join('@'),
+      GIT_COMMITTER_NAME: 'Ada',
+      GIT_COMMITTER_EMAIL: ['ada', 'example.com'].join('@'),
+    });
+    const findings = scanIdentities(readIdentities(dir), []);
+    assert.ok(findings.length > 0, 'the planted identity must be found');
+    assert.match(
+      findings[0].file,
+      /^commit [0-9a-f]{7} on HEAD$/,
+      'the finding must name both the commit and the ref that was scanned',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

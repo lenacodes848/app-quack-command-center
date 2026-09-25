@@ -626,3 +626,12 @@ test('a dist cache is never keyed without its build info', () => {
     assert.match(wf, /tsbuildinfo/, 'caching dist without its .tsbuildinfo causes stale builds');
   }
 });
+
+test('the browser tests do not retry, so a flake cannot pass on the second attempt', () => {
+  // A retry lets a flaky smoke test go green with nobody the wiser, which sits
+  // badly next to this project's standing rule that a green tick has to mean
+  // something. If retries are ever wanted, surface retried passes too.
+  const config = read('playwright.config.ts');
+  const retries = config.match(/^\s*retries:\s*(.+?),?\s*$/m)?.[1];
+  assert.equal(retries, '0', `retries must be a literal 0, found ${String(retries)}`);
+});

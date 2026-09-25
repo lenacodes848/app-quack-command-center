@@ -4,7 +4,7 @@ Last updated: 2026-09-25
 
 Full phase plan: `docs/superpowers/plans/2026-09-24-personal-ai-command-center.md`
 
-Active goal: Phase 1 (foundation, TASK_002 to TASK_005). TASK_001 and TASK_002 are done and merged, and every issue labelled `bug` is closed. Next is TASK_003.
+Active goal: Phase 1 (foundation, TASK_002 to TASK_005). TASK_001 and TASK_002 are done and merged, every issue labelled `bug` is closed, and TASK_003 has landed except for criterion 6, which is gated on a branch-protection ruleset. Next substantive work is TASK_004.
 
 Current task: TASK_003
 
@@ -14,9 +14,9 @@ State on 2026-09-25: `main` is the only branch, locally and on the remote, and i
 
 **Decided 2026-09-25, do not re-ask: branch protection.** Classic branch protection returned HTTP 403 on the old private plan, so the owner made the repository **public** specifically to get required status checks. Use the repository-rulesets endpoint, which answers `200` here while `branches/main/protection` still answers `403`. The ruleset is deliberately not created yet: one that requires a check a branch's workflows do not produce would block that branch from merging at all, so it waits until the open pull requests have landed. Until it exists, TASK_003 criterion 6 and test requirement 1 are unmet and their PRD boxes stay unticked.
 
-1. **TASK_003, continuous integration and validation commands.** First write its bite-sized TDD plan at `docs/superpowers/plans/<date>-task-003-ci-validation.md`, in the style of the TASK_002 plan in the same folder (tests first, exact files, interfaces, mutation checks). Scope from the PRD: one `npm run validate` that runs format check, lint, type-check, unit tests, integration tests, coverage, build, a Playwright smoke test and the secret scan. CI on Node 24 LTS, caching dependencies but never secrets or mutable database state. Reports and coverage retained, and screenshots and traces kept when a browser test fails. A deliberately failing fixture must prove CI blocks, and a test must show the CI config holds no credential literal.
-   - Carry-ins already decided: pin `actions/checkout` and `actions/setup-node` to commit SHAs. Run `npm ci`, type-check, lint, Vitest and the builds in CI (today CI runs only the repository tests and scans). Coverage thresholds are 80 percent overall, 85 percent for provider adapters and 90 percent for security modules and state machines. There are no adapters yet, so set the overall threshold now and add the per-area thresholds with their packages. Install Playwright browsers in CI (`npx playwright install --with-deps chromium`). It needs a first smoke test against the built web app, which today is only a title. Cache each `dist` together with its build info, never one without the other. Keep the pinned, checksum-verified gitleaks steps and the zero-commits guard exactly as they are.
-   - Open enhancement issues that overlap TASK_003: #7 (the CI permissions test misses job-level blocks and other workflow files, and TASK_003 adds a second workflow) and #13 (build tests run inside `npm test` under a 30 second timeout, so split them into a slower project). Also open and not urgent: #14 (web tsconfig does not extend the base, ESLint skips the guard call site), #12 (the VITE_ guard has no allowlist), #15 (PORT rejects 0), #6 (lockfile exclusion by exact path).
+1. **TASK_003 is mostly done — do not rebuild it.** Acceptance criteria 1 to 5 and test requirements 2 and 3 landed in #25 on 2026-09-25: `npm run validate` (eleven checks, one command), the `validate.yml` workflow with its `validate` and `e2e` jobs, the Vitest unit/integration split, the Playwright smoke test with retained failure artifacts, 80 percent coverage thresholds, commit-metadata scanning and the workflow-wide guards. Issues #7, #13 and #23 are closed by it.
+   - **What remains:** criterion 6 ("CI blocks merging when any required check fails") and test requirement 1 (a deliberately failing fixture proving it). Both need a branch-protection ruleset, which is deliberately deferred until the open pull requests have landed, because a ruleset requiring the `validate` and `e2e` checks blocks any branch whose workflows do not produce them. Use the repository-rulesets endpoint, not classic protection. Their PRD boxes stay unticked until then.
+   - **Deferred, not forgotten:** issue #24 holds the scanner follow-ups (commit messages unscanned, shallow-clone blindness, two smaller gaps). Still open and not urgent: #14, #12, #15, #6.
 2. **TASK_004, shared contracts and state machines.** The exact names and the proposed transition tables are in the Phase 1 section of `docs/superpowers/plans/2026-09-24-personal-ai-command-center.md`. Table-driven tests must accept every valid transition and reject every other pair.
 3. **TASK_005, SQLite storage.** better-sqlite3 13.0.1 is verified (prebuilt binary, FTS5, WAL, online backup). Do not approve its npm install script. Confirm the Linux CI runner loads it from the prebuilt binary.
 4. **Then Phase 2 onward,** following the phase plan and the task graph below. At the start of each phase write a just-in-time bite-sized TDD plan file. Stop at every owner gate below.
@@ -67,7 +67,7 @@ Status values: pending, completed, pending_decision, not_applicable. Excluded ta
 |---|---|---|---|---|
 | TASK_001 | Source separated repository and project memory | none | 0 | completed |
 | TASK_002 | Monorepo scaffold and pinned toolchain | 001 | 1 | completed |
-| TASK_003 | Continuous integration and validation commands | 002 | 1 | pending |
+| TASK_003 | Continuous integration and validation commands | 002 | 1 | pending (criteria 1 to 5 and test requirements 2 to 3 landed in #25; criterion 6 and test requirement 1 need the ruleset) |
 | TASK_004 | Shared contracts and state machines | 002 | 1 | pending |
 | TASK_005 | SQLite storage and migrations | 004 | 1 | pending |
 | TASK_006 | Provider profile configuration and account isolation | 004, 005 | 2 | pending |

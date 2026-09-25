@@ -120,7 +120,9 @@ Each of these cost time in this project. Apply them from the start.
 - Inside a quoted heredoc, write a single backslash for a newline escape in Python. A doubled backslash writes a literal backslash and n into the file. A repository test now fails if a memory file contains one.
 - A green CI tick is evidence only for the commit it ran on. Compare the run's `headSha` with the pull request head, and read what the scanner actually scanned.
 - Read the whole issue, reproduce it, and test the suggested fix before adopting it. The suggested fix for issue 10 would not have worked.
-- Until TASK_003 lands, CI runs only the repository tests and the scans. It does not run `npm ci`, type-check, lint, Vitest or the builds, so toolchain changes are proven locally and in a clean clone, not by CI.
+- CI runs two workflows. `secrets-and-source-protection` runs the repository tests and the three scans; `validate` runs `npm ci`, format check, lint, type-check, unit tests with coverage, the builds, the integration project and the browser smoke test, in a `validate` job and an `e2e` job. Coverage and Playwright artifacts are retained and upload even when the run fails. Landed 2026-09-25.
+- `npm run test:repo` deliberately runs in the secrets workflow only. Some of its tests shell out to gitleaks, which only that workflow installs, so running it in `validate` too would fail on a missing binary.
+- **What CI still does not enforce:** merging. No branch-protection ruleset exists yet, so a red check does not block a merge. TASK_003 acceptance criterion 6 and test requirement 1 remain unmet for that reason, and the ruleset waits until the open pull requests have landed — one requiring the `validate` and `e2e` checks would block any branch whose workflows do not produce them.
 
 ## Follow-ups and known gaps
 

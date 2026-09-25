@@ -8,6 +8,7 @@ export default defineConfig({
     alias: {
       '@quack/contracts': src('./packages/contracts/src/index.ts'),
       '@quack/config': src('./packages/config/src/index.ts'),
+      '@quack/adapter': src('./packages/adapter/src/index.ts'),
     },
   },
   test: {

@@ -4,11 +4,13 @@ Last updated: 2026-09-24
 
 Full phase plan: `docs/superpowers/plans/2026-09-24-personal-ai-command-center.md`
 
-Active goal: Phase 0 (discovery, decisions, repository) is complete. Phase 1 (foundation) starts after the owner approves the Phase 0 gate.
+Active goal: Phase 0 (discovery, decisions, repository) is complete and merged. Phase 1 (foundation, TASK_002 to TASK_005) is next.
+
+Handoff for the next coding agent: `HANDOFF.md`
 
 Current task: TASK_002
 
-TASK_002 has not started. It is blocked only on the owner's approval of the Phase 0 pull request.
+TASK_002 has not started and is unblocked, because the Phase 0 pull requests were merged on 2026-09-24 (UTC 2026-09-25). Start by writing the Phase 1 bite-sized TDD plan, as described in `HANDOFF.md`.
 
 ## Recently completed
 

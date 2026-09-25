@@ -3,15 +3,24 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Tilde paths (~/...) are deliberately allowed: they name no user. Only absolute
+// home directories that include a user name are findings.
+const HOME_DIRECTORY = new RegExp(
+  ['(?:^|[\\s"\'`(=:])', '(?:/Users/|/home/)', '[A-Za-z0-9._-]+'].join(''),
+);
+
+// The SSH remote form (user "git" at a host) is not a personal address.
+const EMAIL =
+  /([A-Za-z0-9._%+-]+)@(?!example\.(?:com|org|net)\b)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+
 const RULES = [
   {
     rule: 'home-directory-path',
-    pattern: new RegExp(['(?:^|[\\s"\'`(=:])', '(?:/Users/|/home/)', '[A-Za-z0-9._-]+/'].join('')),
+    matches: (text) => HOME_DIRECTORY.test(text),
   },
   {
     rule: 'email-address',
-    pattern:
-      /[A-Za-z0-9._%+-]+@(?!example\.(?:com|org|net)\b)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/,
+    matches: (text) => [...text.matchAll(EMAIL)].some((m) => m[1] !== 'git'),
   },
 ];
 
@@ -40,8 +49,8 @@ export function scanFiles(rootDir, files, denylist) {
     if (!existsSync(full)) continue;
     const lines = readFileSync(full, 'utf8').split('\n');
     lines.forEach((text, i) => {
-      for (const { rule, pattern } of RULES) {
-        if (pattern.test(text)) findings.push({ file, line: i + 1, rule });
+      for (const { rule, matches } of RULES) {
+        if (matches(text)) findings.push({ file, line: i + 1, rule });
       }
       const lower = text.toLowerCase();
       for (const d of deny) {

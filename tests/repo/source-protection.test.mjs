@@ -5,9 +5,15 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { scanFiles, loadDenylist } from '../../scripts/source-protection-scan.mjs';
+import {
+  scanFiles,
+  loadDenylist,
+  scanIdentities,
+  readIdentities,
+} from '../../scripts/source-protection-scan.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const denylistPath = join(root, '.source-protection-denylist');
 
 function fixture(files) {
   const dir = mkdtempSync(join(tmpdir(), 'sp-'));
@@ -139,4 +145,62 @@ test('every tracked file in this repository passes the source protection scan', 
     encoding: 'utf8',
   });
   assert.match(out, /source protection scan passed/i);
+});
+
+const identity = (value, field = 'author-email') => [{ commit: 'abc1234', field, value }];
+
+// Assembled from parts deliberately. This repository scans its own files, and the
+// file-content email rule rejects any literal address outside example.com — this
+// plan document included. Step 5 below teaches that rule about the noreply forms;
+// until then, a literal here would fail `npm run scan:source`.
+const NOREPLY_USER = ['60458184+someone', 'users.noreply.github.com'].join('@');
+const NOREPLY_BOT = ['noreply', 'github.com'].join('@');
+
+test('a GitHub noreply identity is allowed', () => {
+  assert.deepEqual(scanIdentities(identity(NOREPLY_USER), []), []);
+  assert.deepEqual(scanIdentities(identity(NOREPLY_BOT), []), []);
+});
+
+test('a personal email in commit metadata is a finding', () => {
+  const findings = scanIdentities(identity('someone@example.com'), []);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, 'identity-email');
+  assert.equal(findings[0].file, 'commit abc1234');
+});
+
+test('a deny-listed name in commit metadata is a finding', () => {
+  const findings = scanIdentities(identity('Ada', 'author-name'), ['ada']);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, 'deny-list');
+});
+
+test('identity findings never print the matched text', () => {
+  const findings = scanIdentities(identity('hidden@example.com'), ['hidden']);
+  for (const f of findings) {
+    assert.ok(!JSON.stringify(f).includes('hidden@example.com'));
+    assert.ok(!JSON.stringify(f).includes('hidden'));
+  }
+});
+
+test('committer metadata is scanned, not just author metadata', () => {
+  assert.equal(scanIdentities(identity('someone@example.com', 'committer-email'), []).length, 1);
+  assert.equal(scanIdentities(identity('Ada', 'committer-name'), ['ada']).length, 1);
+});
+
+test('this repository has no deny-listed identity in any commit', () => {
+  const findings = scanIdentities(readIdentities(root), loadDenylist(denylistPath));
+  assert.deepEqual(findings, [], 'commit metadata must be free of personal identities');
+});
+
+test('a GitHub noreply address is not a personal address in file content', () => {
+  const noreply = ['60458184+someone', 'users.noreply.github.com'].join('@');
+  assert.deepEqual(scanText(`commit identity is Lena <${noreply}>\n`), []);
+  assert.deepEqual(scanText(`bot identity is ${['noreply', 'github.com'].join('@')}\n`), []);
+});
+
+test('a genuinely personal address in file content is still a finding', () => {
+  const personal = ['someone', 'somewhere.test'].join('@');
+  const findings = scanText(`write to ${personal}\n`);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, 'email-address');
 });

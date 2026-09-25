@@ -20,7 +20,8 @@ const RULES = [
   },
   {
     rule: 'email-address',
-    matches: (text) => [...text.matchAll(EMAIL)].some((m) => m[1] !== 'git'),
+    matches: (text) =>
+      [...text.matchAll(EMAIL)].some((m) => m[1] !== 'git' && !ALLOWED_IDENTITY_EMAIL.test(m[0])),
   },
 ];
 
@@ -61,6 +62,45 @@ export function scanFiles(rootDir, files, denylist) {
   return findings;
 }
 
+// Commit metadata is not file content, so the file rules do not apply to it. The
+// only identities allowed to author a commit here are GitHub's noreply forms.
+const ALLOWED_IDENTITY_EMAIL =
+  /^(?:[A-Za-z0-9._%+-]+@users\.noreply\.github\.com|noreply@github\.com)$/;
+
+export function scanIdentities(identities, denylist) {
+  const findings = [];
+  const deny = denylist.map((d) => d.toLowerCase());
+  for (const { commit, field, value } of identities) {
+    if (field.endsWith('-email') && !ALLOWED_IDENTITY_EMAIL.test(value)) {
+      findings.push({ file: `commit ${commit}`, line: field, rule: 'identity-email' });
+    }
+    const lower = value.toLowerCase();
+    for (const d of deny) {
+      if (lower.includes(d)) {
+        findings.push({ file: `commit ${commit}`, line: field, rule: 'deny-list' });
+      }
+    }
+  }
+  return findings;
+}
+
+export function readIdentities(rootDir) {
+  const out = execFileSync('git', ['log', '--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce', '--all'], {
+    cwd: rootDir,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const identities = [];
+  for (const line of out.split('\n').filter(Boolean)) {
+    const [commit, an, ae, cn, ce] = line.split('\x1f');
+    identities.push({ commit: commit.slice(0, 7), field: 'author-name', value: an });
+    identities.push({ commit: commit.slice(0, 7), field: 'author-email', value: ae });
+    identities.push({ commit: commit.slice(0, 7), field: 'committer-name', value: cn });
+    identities.push({ commit: commit.slice(0, 7), field: 'committer-email', value: ce });
+  }
+  return identities;
+}
+
 function trackedFiles(rootDir) {
   const out = execFileSync(
     'git',
@@ -79,7 +119,10 @@ if (isMain) {
   const denylist = loadDenylist(
     process.env.SOURCE_PROTECTION_DENYLIST ?? join(rootDir, '.source-protection-denylist'),
   );
-  const findings = scanFiles(rootDir, trackedFiles(rootDir), denylist);
+  const findings = [
+    ...scanFiles(rootDir, trackedFiles(rootDir), denylist),
+    ...scanIdentities(readIdentities(rootDir), denylist),
+  ];
   if (findings.length > 0) {
     for (const f of findings) console.error(`${f.file}:${f.line}  ${f.rule}`);
     console.error(

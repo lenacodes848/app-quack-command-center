@@ -65,7 +65,7 @@ First start prints a pairing code; later starts say how many devices are paired 
 None of these has a GitHub issue. They are the actual product gaps.
 
 1. **A button to pair a second device, and a list of paired devices.** `POST /api/pairing-code` already exists and is authenticated, but nothing in the interface calls it, so adding a device means restarting with `QUACK_PAIR=1`. A device list also gives per-device revocation, where today only "log out everywhere" exists. Smallest of the three and it finishes what authentication started.
-2. **Remote access through an authenticated tunnel** (Phase 6, TASK_023). This is the PRD's headline promise and the reason the product exists. Now unblocked by authentication. **Order is fixed and is an owner gate:** Cloudflare Access application and policy first, tunnel route second, and no public hostname without explicit approval. Two known items land here: `x-forwarded-proto` is currently trusted from anyone (see the open issue), and a `Secure` cookie needs HTTPS end to end — which the tunnel provides and a bare LAN address does not.
+2. **Remote access through an authenticated tunnel** (Phase 6, TASK_023). This is the PRD's headline promise and the reason the product exists. Now unblocked by authentication. **Order is fixed and is an owner gate:** Cloudflare Access application and policy first, tunnel route second, and no public hostname without explicit approval. Two known items land here: `x-forwarded-proto` is currently trusted from anyone (#41), and a `Secure` cookie needs HTTPS end to end — which the tunnel provides and a bare LAN address does not.
 3. **Shell with approvals** — the PRD's own path, needing `--permission-prompts host` with `--input-format stream-json`, and a decision about `--restricted` removing `Bash`. Read the scope section above first: TASK_018 has nothing to approve until this changes.
 
 ### Open issues, all deliberately deferred
@@ -74,7 +74,7 @@ Every one has the reasoning recorded on the issue itself. None blocks using the 
 
 | Issue | What it is | Why it waits |
 |---|---|---|
-| #37 pt 2 | `x-forwarded-proto: https` trusted from anyone | The right answer depends on the tunnel design. Do it at TASK_023. |
+| #41 | `x-forwarded-proto: https` trusted from anyone | The right answer depends on the tunnel design. Do it at TASK_023. Split out of #37, whose part 1 shipped. |
 | #28 | Blanket `mcp__*` deny should be an allowlist | Scope decision above. Costs nothing while no MCP tool is wanted. |
 | #24 | Scanner: commit messages, shallow clones | One part needs a policy decision — this repo mandates a `Co-Authored-By` trailer, so scanning messages flags every commit. |
 | #14 | `apps/web/tsconfig.json` does not extend the base config | Web code misses `noImplicitOverride`. Strongest of the hygiene set; may surface errors in the `.tsx` files. |

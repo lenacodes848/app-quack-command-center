@@ -57,8 +57,41 @@ export interface AppOptions {
   randomBytes?: RandomBytes | undefined;
 }
 
-/** Largest prompt accepted, so a stray request cannot exhaust memory. */
-const MAX_PROMPT_BYTES = 100_000;
+/** Largest request body accepted, so a stray request cannot exhaust memory. */
+export const MAX_BODY_BYTES = 100_000;
+
+/**
+ * Thrown when a body exceeds {@link MAX_BODY_BYTES}.
+ *
+ * A distinct type because the alternative was indistinguishable from a parse
+ * failure: both call sites read the body inside the `try` whose `catch` exists
+ * for `JSON.parse`, so an oversized — but perfectly valid — body came back as
+ * "Body must be JSON." That sends the owner hunting for a syntax error that is
+ * not there and never mentions that a limit exists.
+ */
+export class BodyTooLargeError extends Error {
+  constructor() {
+    super(`Request body exceeds ${String(MAX_BODY_BYTES)} bytes.`);
+    this.name = 'BodyTooLargeError';
+  }
+}
+
+/**
+ * Appended to a stored answer that the client stopped reading part-way through.
+ *
+ * Chosen over a schema column for now: `normalized_messages` would need a
+ * migration and the UI a new state, whereas the transcript already exists to
+ * record what went wrong. If interrupted turns later need rendering differently,
+ * that is the point to add the column.
+ */
+export const TRUNCATED_NOTE = '[The connection was lost before this answer finished.]';
+
+/** The 413 body, with the limit named so the owner can act on it. */
+function sendTooLarge(response: ServerResponse): void {
+  sendJson(response, 413, {
+    error: `That message is too large. The limit is ${String(MAX_BODY_BYTES)} bytes.`,
+  });
+}
 
 const CONTENT_TYPES = new Map<string, string>([
   ['.html', 'text/html; charset=utf-8'],
@@ -86,7 +119,7 @@ async function readBody(request: IncomingMessage): Promise<string> {
   for await (const chunk of request) {
     const buffer = chunk as Buffer;
     size += buffer.length;
-    if (size > MAX_PROMPT_BYTES) throw new Error('Request body is too large.');
+    if (size > MAX_BODY_BYTES) throw new BodyTooLargeError();
     chunks.push(buffer);
   }
   return Buffer.concat(chunks).toString('utf8');
@@ -153,6 +186,8 @@ async function streamTurn(
   // chunk, so the pieces are gathered here and written down once the turn ends.
   const spoken: string[] = [];
   let failure: string | undefined;
+  /** Set when the loop stopped because the client vanished, not because the turn ended. */
+  let truncated = false;
 
   // Writing to a destroyed response emits 'error', and with no listener that
   // surfaces as an unhandled stream error and takes the process down. There is
@@ -169,7 +204,10 @@ async function streamTurn(
 
   try {
     for await (const event of events) {
-      if (clientGone()) break;
+      if (clientGone()) {
+        truncated = true;
+        break;
+      }
       if (event.type === 'session') onSession(event.sessionId, event.model);
       if (event.type === 'text') spoken.push(event.text);
       if (event.type === 'error') failure = event.message;
@@ -194,7 +232,10 @@ async function streamTurn(
           response.once('close', done);
           response.once('error', done);
         });
-        if (clientGone()) break;
+        if (clientGone()) {
+          truncated = true;
+          break;
+        }
       }
     }
   } catch (thrown) {
@@ -205,7 +246,16 @@ async function streamTurn(
 
   // A failed turn is still recorded. The owner asked a question; a transcript
   // that omits what went wrong reads as though it was never asked.
-  const reply = spoken.join('').trim() === '' ? (failure ?? '') : spoken.join('');
+  //
+  // A turn cut short by a hangup is recorded too, but it has to say so. Stored
+  // bare, whatever streamed before the disconnect is indistinguishable from a
+  // complete short answer, so reopening the conversation shows a confident
+  // half-sentence — and the agent's own context and the transcript then disagree
+  // about what was said, because the next turn resumes by provider session id.
+  let reply = spoken.join('').trim() === '' ? (failure ?? '') : spoken.join('');
+  if (truncated) {
+    reply = reply === '' ? TRUNCATED_NOTE : `${reply}\n\n${TRUNCATED_NOTE}`;
+  }
   if (reply !== '') onReply(reply);
 
   response.end();
@@ -300,8 +350,9 @@ export function createApp(options: AppOptions) {
             return;
           }
           code = value;
-        } catch {
-          sendJson(response, 400, { error: 'Body must be JSON.' });
+        } catch (thrown) {
+          if (thrown instanceof BodyTooLargeError) sendTooLarge(response);
+          else sendJson(response, 400, { error: 'Body must be JSON.' });
           return;
         }
 
@@ -504,8 +555,9 @@ export function createApp(options: AppOptions) {
             }
             prompt = text;
             if (typeof body['sessionId'] === 'string') wantedSession = body['sessionId'];
-          } catch {
-            sendJson(response, 400, { error: 'Body must be JSON.' });
+          } catch (thrown) {
+            if (thrown instanceof BodyTooLargeError) sendTooLarge(response);
+            else sendJson(response, 400, { error: 'Body must be JSON.' });
             return;
           }
 

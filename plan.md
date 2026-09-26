@@ -22,6 +22,15 @@ The owner stopped the infrastructure work mid-flight: *"stop fixing linting erro
 
 **Done 2026-09-25: the slice has been run against the real CLI** with the owner's approval, in a scratch directory. It works, and it found two defects that no test against a fake could have found — the agent could not write a file, and it inherited the owner's own connectors. Both are fixed; see the last entry of `progress.md` and "Verified provider behaviour" in `research.md`.
 
+## Product scope — decided 2026-09-26, do not re-litigate
+
+**This is a dashboard for managing local coding agents, as the PRD describes it.** Browser-tab control and operating macOS are **explicitly out of scope for now.** Issue #27 raised the ambiguity: a goal recorded there described agents driving Chrome tabs and completing operations on a Mac from a phone, and nothing in the PRD, the task graph or any memory file mentioned it. The owner settled it in favour of the PRD.
+
+What follows from that, so the reasoning is not lost:
+
+- **#28 is deferred, not rejected.** It proposes replacing the blanket `--disallowedTools mcp__*` deny with an explicit allowlist plus `--strict-mcp-config`. The argument is sound — an allowlist is the better shape, and a namespace deny cannot tell the owner's Gmail from a server this product deliberately installed. But the only capability the deny currently forecloses is chrome-devtools and playwright, which are out of scope, so the deny costs nothing today and the allowlist buys nothing yet. Revisit it when a tool genuinely needs granting, and verify with the `system/init` event as `research.md` requires — the baseline to beat is 21 tools, Read and Write present, Bash and every `mcp__*` absent.
+- The PRD's own promise still stands and is still unbuilt: reaching the dashboard from a phone through an authenticated tunnel. That is the product goal, not browser control.
+
 ## Next steps (resume here)
 
 State on 2026-09-25, end of the live-run session. The product is the MVP vertical slice on `feat/mvp-claude-adapter`: the Claude Code adapter, the streaming HTTP server and the chat UI. `npm run validate` exits 0 on it, all eleven checks, 214 unit tests, 10 integration, 84 repository tests and 2 browser tests. To confirm before starting, run `nvm use`, `git pull`, `npm run validate`. The working rules and shell pitfalls are in `research.md`. Read the last entry of `progress.md` first.

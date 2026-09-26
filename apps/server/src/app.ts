@@ -333,6 +333,27 @@ export function createApp(options: AppOptions) {
           sendJson(response, 405, { error: 'Use POST.' });
           return;
         }
+
+        // Pairing is handled before the block that guards every other
+        // state-changing request, which made it the only POST on the port that
+        // never proved where it came from. It stays exempt from the CSRF *token*
+        // half — there is no session yet to have issued one — but not from the
+        // origin half, or any page the owner happens to have open can post
+        // guesses at the loopback port and burn their pairing window.
+        //
+        // Checked before the address and before the code, so a refused caller
+        // learns nothing about either.
+        if (
+          !isSameOrigin({
+            origin: request.headers.origin,
+            host: request.headers.host,
+            secFetchSite: request.headers['sec-fetch-site'],
+          })
+        ) {
+          sendJson(response, 403, { error: 'Request rejected.' });
+          return;
+        }
+
         let code: string;
         try {
           const parsed: unknown = JSON.parse(await readBody(request));

@@ -329,3 +329,27 @@ Also taken from the review's non-blocking notes: a test named "a wrong code from
 Evidence: `npm run validate` exits 0 with no warnings. 247 unit tests, 10 integration, 84 repository, 3 browser. Branch coverage 85.24 percent. Scans clean over 66 commits.
 
 Left alone: #37, filed by the review for two unreachable edge cases in `canHoldSecureCookie` and the `x-forwarded-proto` trust boundary, which matters once a tunnel terminates TLS in front of the server. Neither is reachable while the server binds loopback only.
+
+## 2026-09-26 (issue triage, and the two fixes worth doing now)
+
+#36 merged. Nine issues remained; the owner's priority is getting the command center usable, so each was judged on whether it blocks that. Three premises turned out to be stale or never realised, which only checking showed:
+
+- **#6** — the lockfile exclusion was predicted to break when the repo became a workspace monorepo. It did not: there is still one lockfile, at the root, and the literal path still matches it.
+- **#12** — the `VITE_` secret-name guard rejects legitimate names. There are **zero** `VITE_` variables anywhere in the tree, so nothing is being rejected.
+- **#15** — `PORT=0` was wanted because "TASK_013 integration tests will want it". TASK_013 shipped without needing it: the test kit calls `server.listen(0, …)` directly and bypasses `loadServerEnv` entirely.
+
+All three are left open with that recorded, rather than fixed against a motivation that has not arrived.
+
+**The honest summary of the nine: none of them makes the dashboard more usable.** They are hardening and hygiene. What is actually missing is a button to pair a second device, remote access from a phone, and letting the agent do more than edit files in a scratch directory — and none of those has an issue. So the work here was deliberately small.
+
+**Done: #31.** `/api/pair` was handled before the block that guards every other state-changing request, making it the only POST on the port that never proved where it came from. It stays exempt from the CSRF *token* half — no session exists yet to have issued one — but not from the origin half. Without it, any page the owner happens to have open can post guesses at the loopback port and burn their ten-minute pairing window, from a request the server cannot attribute; there is also a DNS-rebinding shape where reading the response stops being blocked. The check is applied before the address check and before the code, so a refused caller learns nothing about either — a test pins that ordering.
+
+**Done: #37 part 1.** In `canHoldSecureCookie` the port strip ran before the bracket strip, so a bare `::1` had `:1` removed as though it were a port, leaving `:`, and a loopback address was refused. Fixed by deciding the shape first: a bracketed literal may carry a port, a bare IPv6 literal cannot and its colons must be left alone, and a name or IPv4 address may. Telling the second from the third by counting colons is what stops `::1` losing its tail. Loopback now also covers the whole 127/8 block, the uncompressed `0:0:0:0:0:0:0:1`, the IPv4-mapped `::ffff:127.0.0.1`, and zone indices. Verified the refusals still hold — LAN, public, link-local, `0.0.0.0` and `[::]` are all refused, and near-misses like `1270.0.0.1` and `127.0.0.1.evil.example` too, which are now in the table.
+
+**Decided: product scope (#27).** This is the dashboard the PRD describes; browser-tab control and operating macOS are explicitly out of scope for now, recorded in `plan.md` so it stops being ambiguous. That decision is what defers **#28**: an allowlist is the better shape than a blanket `mcp__*` deny, and the argument in that issue is sound, but the only capability the deny forecloses is chrome-devtools and playwright, which are out of scope — so the deny costs nothing today and the allowlist buys nothing yet.
+
+**Deferred with reasons recorded:** #37 part 2 (`x-forwarded-proto: https` is accepted from anyone — a real trust boundary, but it needs the tunnel design to say who is trusted, and nothing but local clients can reach the port today), #14 (web tsconfig does not extend the base config, so web code misses `noImplicitOverride` — the strongest of the hygiene set), #24 (scanner gaps, one of which needs a policy decision because this repo mandates a `Co-Authored-By` trailer on every commit).
+
+Mutation results: removing the pairing origin check fails three tests, moving it after the address check fails one, and restoring the old replace ordering fails one.
+
+Evidence: `npm run validate` exits 0 with no warnings. 263 unit tests, 10 integration, 84 repository, 3 browser. Branch coverage 85.41 percent. Scans clean over 67 commits.

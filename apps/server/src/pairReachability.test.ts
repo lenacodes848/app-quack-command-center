@@ -25,6 +25,17 @@ describe('canHoldSecureCookie', () => {
     ['localhost:4317', true],
     ['[::1]:4317', true],
     ['127.0.0.1', true],
+    // A bare IPv6 literal with no brackets and no port. The port strip used to
+    // run before the bracket strip, so `::1` had `:1` taken off it as though it
+    // were a port, leaving `:` — and a loopback address was refused.
+    ['::1', true],
+    ['[::1]', true],
+    // Other legitimate spellings of loopback. A browser normalises to `[::1]`,
+    // so these arrive only from something hand-rolled, but refusing them would
+    // be wrong.
+    ['[0:0:0:0:0:0:0:1]', true],
+    ['[::ffff:127.0.0.1]', true],
+    ['127.0.0.2:4317', true],
   ])('accepts loopback: %s', (host, expected) => {
     // Verified in a real browser: a loopback address counts as a trustworthy
     // origin, so a Secure cookie is honoured over plain HTTP there.
@@ -37,6 +48,15 @@ describe('canHoldSecureCookie', () => {
     ['172.16.4.9:4317'],
     ['quack.example'],
     ['my-mac.local:4317'],
+    // Not loopback, however much they look like an address the server owns.
+    ['0.0.0.0:4317'],
+    ['[::]:4317'],
+    ['[2001:db8::1]:4317'],
+    ['[fe80::1%25en0]:4317'],
+    // Near-misses for the 127/8 and ::1 patterns.
+    ['1270.0.0.1'],
+    ['127.0.0.1.evil.example'],
+    ['[::2]:4317'],
   ])('rejects %s over plain HTTP, because the cookie would be discarded', (host) => {
     expect(canHoldSecureCookie({ host, forwardedProto: undefined })).toBe(false);
   });
@@ -62,6 +82,7 @@ async function pairWithHost(
   base: string,
   host: string,
   code: string,
+  options: { omitOrigin?: boolean; origin?: string } = {},
 ): Promise<{ status: number; body: string; raw: string }> {
   const url = new URL(base);
   const payload = JSON.stringify({ code });
@@ -93,7 +114,7 @@ async function pairWithHost(
     [
       'POST /api/pair HTTP/1.1',
       `Host: ${host}`,
-      `Origin: http://${host}`,
+      ...(options.omitOrigin === true ? [] : [`Origin: ${options.origin ?? `http://${host}`}`]),
       'Content-Type: application/json',
       `Content-Length: ${String(Buffer.byteLength(payload))}`,
       'Connection: close',
@@ -182,5 +203,86 @@ describe('pairing from an address that cannot hold the cookie', () => {
     });
     cleanups.push(server.close);
     expect((await server.call('/api/me')).status).toBe(200);
+  });
+});
+
+describe('pairing must prove where it came from', () => {
+  test('a cross-origin POST is refused before the code is looked at', async () => {
+    // `/api/pair` used to be the only POST on the port that never proved its
+    // origin: it is handled before the block that checks every other
+    // state-changing request. It has to stay exempt from the CSRF *token* half —
+    // there is no session yet to have issued one — but not from the origin half.
+    // What that left open: any page the owner happens to have open can post
+    // guesses at the loopback port and burn the pairing window.
+    const server = await startPaired({
+      dataDir: scratch(),
+      workspaceDir: scratch(),
+      paired: false,
+    });
+    cleanups.push(server.close);
+    const code = server.pairing.open();
+
+    const response = await fetch(`${server.base}/api/pair`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+      body: JSON.stringify({ code }),
+    });
+
+    expect(response.status).toBe(403);
+    // And the code survives, because the refusal happens before `verify`.
+    expect(server.pairing.isOpen()).toBe(true);
+  });
+
+  test('a request that proves nothing about its origin is refused', async () => {
+    // No Origin and no Sec-Fetch-Site. Browsers send Origin on any POST, so this
+    // is not a browser; refuse rather than assume.
+    const server = await startPaired({
+      dataDir: scratch(),
+      workspaceDir: scratch(),
+      paired: false,
+    });
+    cleanups.push(server.close);
+    const code = server.pairing.open();
+
+    const response = await pairWithHost(server.base, new URL(server.base).host, code, {
+      omitOrigin: true,
+    });
+    expect(response.status).toBe(403);
+    expect(server.pairing.isOpen()).toBe(true);
+  });
+
+  test('the ordinary same-origin POST from the pairing screen still works', async () => {
+    const server = await startPaired({
+      dataDir: scratch(),
+      workspaceDir: scratch(),
+      paired: false,
+    });
+    cleanups.push(server.close);
+    const code = server.pairing.open();
+
+    const response = await server.call('/api/pair', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    expect(response.status).toBe(200);
+    expect((await server.call('/api/me')).status).toBe(200);
+  });
+
+  test('a cross-origin POST is refused even before the address check', async () => {
+    // Order matters: origin first, so a hostile page learns nothing about
+    // whether its address could have held a cookie either.
+    const server = await startPaired({
+      dataDir: scratch(),
+      workspaceDir: scratch(),
+      paired: false,
+    });
+    cleanups.push(server.close);
+    const code = server.pairing.open();
+
+    const response = await pairWithHost(server.base, '192.168.1.20:4317', code, {
+      origin: 'https://evil.example',
+    });
+    expect(response.status).toBe(403);
   });
 });

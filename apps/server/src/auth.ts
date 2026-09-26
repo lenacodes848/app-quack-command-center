@@ -239,12 +239,32 @@ export function canHoldSecureCookie(request: {
   if (request.forwardedProto === 'https') return true;
   if (request.host === undefined || request.host === '') return false;
 
-  // Strip the port, and the brackets around an IPv6 literal.
-  const host = request.host
-    .replace(/:\d+$/u, '')
-    .replace(/^\[|\]$/gu, '')
-    .toLowerCase();
-  return host === 'localhost' || host === '::1' || host === '127.0.0.1' || /^127\./u.test(host);
+  const lower = request.host.toLowerCase();
+
+  // Brackets first, THEN the port. In the other order a bare `::1` — no
+  // brackets, no port — had `:1` stripped as though it were a port, leaving `:`,
+  // so a loopback address was refused. An IPv6 literal carries a port only when
+  // it is bracketed, which is why the port strip is scoped to the other branch.
+  // Three shapes: a bracketed literal (which may carry a port), a bare IPv6
+  // literal (which cannot, and whose colons must be left alone), and a name or
+  // IPv4 address with an optional port. Telling the second from the third by
+  // counting colons is what stops `::1` losing its tail.
+  const host = lower.startsWith('[')
+    ? (/^\[([^\]]*)\]/u.exec(lower)?.[1] ?? '')
+    : (lower.match(/:/gu) ?? []).length > 1
+      ? lower
+      : lower.replace(/:\d+$/u, '');
+
+  // A zone index (`::1%lo0`) names an interface, not a different address.
+  const bare = host.replace(/%.*$/u, '');
+
+  if (bare === 'localhost') return true;
+  // The whole 127/8 block is loopback, not only 127.0.0.1.
+  if (/^127(?:\.\d{1,3}){3}$/u.test(bare)) return true;
+  // IPv6 loopback, including the uncompressed spelling of ::1.
+  if (/^(?:0*:)*0*1$/u.test(bare)) return true;
+  // IPv4-mapped loopback, e.g. ::ffff:127.0.0.1.
+  return /^(?:0*:)*(?:ffff:)?127(?:\.\d{1,3}){3}$/u.test(bare);
 }
 
 export interface OriginCheck {

@@ -39,6 +39,51 @@ function builtWebDir(): string | undefined {
   return candidate;
 }
 
+/** How long a shutdown waits for open connections before stopping anyway. */
+export const SHUTDOWN_GRACE_MS = 5_000;
+
+/**
+ * Stop cleanly on Ctrl+C and on SIGTERM.
+ *
+ * Without this the process is simply killed, the database connection never
+ * closes, and the write-ahead log is left to grow across every restart — which
+ * is recoverable, but means a "clean" stop is not clean at all.
+ *
+ * A streaming turn can hold a connection open for minutes, so the wait for
+ * connections to drain is bounded. On the forced path the store is still closed
+ * first, because checkpointing the log matters more than the socket.
+ */
+function installShutdown(server: ReturnType<typeof createServer>, closeStore: () => void): void {
+  let stopping = false;
+
+  const stop = (signal: NodeJS.Signals): void => {
+    if (stopping) return;
+    stopping = true;
+    console.log(`${PRODUCT_NAME} stopping (${signal}).`);
+
+    const forced = setTimeout(() => {
+      closeStore();
+      process.exit(0);
+    }, SHUTDOWN_GRACE_MS);
+    // Do not let the timer itself hold the process open once everything is shut.
+    forced.unref();
+
+    // No closeStore() here: the server's own 'close' event already triggers it,
+    // and calling it in both places is redundancy no test can tell apart.
+    server.close(() => {
+      clearTimeout(forced);
+      process.exit(0);
+    });
+  };
+
+  process.once('SIGINT', () => {
+    stop('SIGINT');
+  });
+  process.once('SIGTERM', () => {
+    stop('SIGTERM');
+  });
+}
+
 export function start(env: ServerEnv): ReturnType<typeof createServer> {
   const workspace = workspaceDir(env);
   mkdirSync(workspace, { recursive: true });
@@ -54,11 +99,18 @@ export function start(env: ServerEnv): ReturnType<typeof createServer> {
     }),
   );
 
-  // Closing the store on the way out checkpoints the write-ahead log, so a
-  // clean stop leaves one tidy database file rather than a -wal alongside it.
-  server.once('close', () => {
+  // Closing the store checkpoints the write-ahead log, so a clean stop leaves
+  // one tidy database file rather than a -wal beside it. Closing twice throws,
+  // so both paths into here go through one guard.
+  let storeClosed = false;
+  const closeStore = (): void => {
+    if (storeClosed) return;
+    storeClosed = true;
     store.close();
-  });
+  };
+  server.once('close', closeStore);
+
+  installShutdown(server, closeStore);
 
   // Without this, a port clash surfaces as an unhandled 'error' event and a
   // raw Node stack trace, which says nothing useful to someone who simply has

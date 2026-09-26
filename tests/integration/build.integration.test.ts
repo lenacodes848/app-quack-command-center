@@ -179,3 +179,81 @@ describe('rebuilding from a deleted or cleaned state', () => {
     for (const file of outputs) expect(existsSync(join(root, file)), file).toBe(true);
   });
 });
+
+describe('shutting the server down', () => {
+  // A deliberately bare environment, as the other server tests use: the child
+  // gets only what it needs, so an inherited variable cannot mask a bug.
+  const nodeEnv = { PATH: process.env.PATH ?? '' };
+
+  /**
+   * Start the built server and wait for it to announce its port.
+   *
+   * Returns the child so the test can signal it. Shared by the shutdown tests
+   * because getting a real process to a known-ready state is the fiddly part.
+   */
+  async function startServer(dataDir: string, port: string): Promise<ReturnType<typeof spawn>> {
+    const child = spawn('node', ['apps/server/dist/index.js'], {
+      cwd: root,
+      env: { ...nodeEnv, DATA_DIR: dataDir, PORT: port },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    await new Promise<void>((resolve, reject) => {
+      let seen = '';
+      const timer = setTimeout(() => {
+        reject(new Error(`server never announced itself; saw: ${seen}`));
+      }, 15_000);
+      const watch = (chunk: string): void => {
+        seen += chunk;
+        if (seen.includes(`http://127.0.0.1:${port}`)) {
+          clearTimeout(timer);
+          resolve();
+        }
+      };
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', watch);
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', watch);
+      child.once('error', reject);
+      child.once('exit', (code) => {
+        clearTimeout(timer);
+        reject(new Error(`server exited early with ${String(code)}; saw: ${seen}`));
+      });
+    });
+    return child;
+  }
+
+  /**
+   * A clean stop must check the write-ahead log back into the database.
+   *
+   * Otherwise the -wal file grows across every restart and never shrinks, and
+   * the README's claim that a clean stop tidies up is simply false. Found by
+   * testing that claim rather than trusting it.
+   */
+  test.each([['SIGTERM'], ['SIGINT']])('checkpoints the write-ahead log on %s', async (signal) => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'quack-shutdown-'));
+    const port = signal === 'SIGTERM' ? '45873' : '45874';
+    const child = await startServer(dataDir, port);
+
+    try {
+      // Write something, so there is a log to check in.
+      await fetch(`http://127.0.0.1:${port}/api/health`);
+      expect(existsSync(join(dataDir, 'quack.db-wal'))).toBe(true);
+
+      const exited = new Promise<number | null>((resolve) => {
+        child.once('exit', (code) => {
+          resolve(code);
+        });
+      });
+      child.kill(signal as NodeJS.Signals);
+      expect(await exited).toBe(0);
+
+      // SQLite removes the -wal and -shm files when the last connection to the
+      // database closes cleanly. Their absence is the evidence.
+      expect(existsSync(join(dataDir, 'quack.db-wal'))).toBe(false);
+      expect(existsSync(join(dataDir, 'quack.db'))).toBe(true);
+    } finally {
+      child.kill('SIGKILL');
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});

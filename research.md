@@ -80,12 +80,90 @@ Lint and format on variant A: ESLint 10.11.0, `@eslint/js` 10.0.1, typescript-es
 
 - Server binds to loopback. Remote access, when built, is Cloudflare Access at the edge plus an application session at the origin.
 - Working directories are restricted to configured roots, resolved through symlinks. Roots are changed locally only, and no API route edits them.
-- Device pairing design: not yet written. It is written here and approved by the owner before TASK_013 starts. The planned shape is a single use, short lived pairing code written to a file with owner-only permissions at startup, exchanged for an HTTP only, secure, same site, expiring and revocable cookie backed by an `app_sessions` table.
+- Device pairing design: **written 2026-09-25, awaiting the owner's approval.** The full design is the section "Device pairing design (TASK_013)" below. No authentication code is written until that approval is recorded here.
 - Secret scanning: CI installs a pinned gitleaks (version and SHA-256 in `.github/workflows/secrets.yml`, checksum taken from the official release and matched against a separate download, and the version must equal the one recorded above) and runs `npm run scan:secrets` (full working tree) and `npm run scan:secrets:history` (full history) with the same scripts a developer runs. The history script fails when gitleaks reports zero commits scanned. The workflow token is read only (`contents: read`). The `gitleaks/gitleaks-action` action is not used, see Failed approaches.
 - Source protection: `scripts/source-protection-scan.mjs` fails on absolute macOS or Linux home directory paths that include a user name (with or without a trailing slash), on email addresses other than the reserved example domains, GitHub's noreply forms and the SSH remote form (user `git` at a host), and on any entry in the local, gitignored `.source-protection-denylist`. Tilde paths such as `~/Downloads/1-git` are deliberately allowed because they name no user, so the worksheet can name the projects directory. It prints file, line and rule, never the matched text.
 - Source protection also scans **commit metadata** — author and committer name and email — not only file content. Added 2026-09-25 after the repository was made public with a personal name and address sitting in the author field of 30 of 36 commits while every check was green.
   - **Scope is `HEAD`, not `--all`.** `--all` walks every ref in a checkout, so a stale local branch or a leftover `refs/remotes/pr/*` fails the scan with a finding unrelated to the code under review — and since the scanner prints no matched text by design, that finding is near-undiagnosable. Findings name the ref alongside the commit. Override with `SOURCE_PROTECTION_REF`.
   - **Policy consequence of being public (recorded 2026-09-25).** The identity rule applies to whatever history is scanned, so an outside contributor whose commits carry an ordinary personal address will fail `scan:source` on their own pull request. That is intended for a single-owner project, and it is written down here rather than left to be discovered: this repository is public to get required status checks, not to invite contributions. If that ever changes, the rule has to be scoped to the owner's own commits instead of dropped.
+
+## Device pairing design (TASK_013)
+
+**Status: written 2026-09-25, NOT YET APPROVED.** The PRD (5.2) and the phase plan both require the owner's explicit approval of this design before any authentication code exists. When approval is given, record it on this line with the date.
+
+### What problem this solves, and what it does not
+
+Today anything that can reach the port can drive the agent. That is the gap. The PRD's threat model (5.1) assumes an attacker who can find the hostname, send arbitrary requests, attempt CSRF from another site, replay a stolen cookie and hammer the login. This design addresses those.
+
+It deliberately does **not** defend against: a compromised machine, another process running as the same user (which can read any `0600` file this design writes), or a hostile browser extension. It is also **not** a replacement for Cloudflare Access at the edge — the PRD requires both layers for remote access, and this is only the origin layer. Loopback binding stays.
+
+### The pairing exchange
+
+1. A pairing code exists only while **pairing mode** is open, so there is never a permanently guessable code sitting there. Pairing mode opens for **10 minutes** in three cases: at startup when no unexpired session exists (first run, or after logout-all); on an authenticated `POST /api/pairing-code`, which is how a second device such as the phone is added from an already-paired one; and at startup with `QUACK_PAIR=1`, the recovery path for having lost every paired device.
+2. On opening, the server generates a code from `crypto.randomBytes`: 10 characters of Crockford base32, about 50 bits, shown grouped as `XXXX-XXXX-XX` so it can be read off a screen and typed on a phone. Only its SHA-256 hash is held in memory.
+3. The code is **printed to the terminal** and **written to `$DATA_DIR/pairing-code`** with mode `0600`. Printing happens only when stdout is a TTY, so running as a background service with logs to a file writes the file and never the log. The file is deleted when the code is used or expires.
+4. The browser posts the code to `POST /api/pair`. The server compares with `timingSafeEqual` after a length check, and the code is **single use**: consumed on success.
+5. On success the server creates a **new** session row and issues a fresh token, so a login always rotates. The token is 32 random bytes as base64url, 256 bits. **The database stores only its SHA-256 hash**, so reading the database yields nothing that can be replayed as a cookie.
+6. **Five consecutive failures invalidate the current code entirely** and a fresh one is issued. That defeats online guessing outright rather than merely slowing it, which matters more than a delay for a 50-bit secret. Failures are also rate limited to 5 per 15 minutes.
+
+### The session cookie
+
+`quack_session=<token>; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=<remaining>`
+
+`Secure` is set unconditionally. **Verified empirically on 2026-09-25** rather than assumed: a browser was served `Secure; SameSite=Strict` cookies over plain `http://127.0.0.1` and returned all of them, because a loopback address counts as a trustworthy origin. So the PRD's `Secure` requirement is met without breaking local HTTP access, and the same cookie works unchanged behind an HTTPS tunnel.
+
+### `app_sessions`, migration 2
+
+The PRD data model (3.6) has no table for application sessions, so this adds one.
+
+```
+id           TEXT PRIMARY KEY      -- uuid
+token_hash   TEXT NOT NULL UNIQUE  -- sha256 hex; never the token itself
+label        TEXT                  -- short, sanitised client hint, for the device list
+created_at   TEXT NOT NULL
+last_used_at TEXT NOT NULL
+expires_at   TEXT NOT NULL
+revoked_at   TEXT
+```
+
+Lookup is by `token_hash`, so verification is an indexed equality on a hash rather than a scan and comparison of secrets. **Absolute expiry 90 days, idle timeout 14 days** on `last_used_at`, which is refreshed at most once a minute so a busy session does not cause a write per request.
+
+### CSRF, in three layers
+
+`SameSite=Strict` is the primary control. On every state-changing request the server also requires a **same-origin check** (`Origin`, falling back to `Sec-Fetch-Site`), rejecting anything cross-site. On top of that a **double-submit token**: a readable `quack_csrf` cookie issued alongside the session, which the browser must echo in an `x-csrf-token` header, compared with `timingSafeEqual`. The token alone would be enough for most cases; all three are cheap and the PRD asks for the header explicitly.
+
+### Route policy
+
+- Public: `GET /api/health`, reduced to `{"ok":true}` with no session or persistence detail, so liveness checking leaks no state; `POST /api/pair`; and the static front-end, which must load unauthenticated in order to show the login screen at all.
+- Authenticated: every other `/api` route, including all of the turn and conversation endpoints.
+- `POST /api/logout` revokes the current session. `POST /api/logout-all` revokes every row, which also closes any session on a device the owner no longer has. Revocation is immediate because it is checked per request.
+
+### Other PRD requirements
+
+Security headers are set explicitly: a CSP with no inline script (`default-src 'self'`, `script-src 'self'`, `style-src 'self'`, `img-src 'self' data:`, `connect-src 'self'`, `frame-ancestors 'none'`, `base-uri 'none'`, `form-action 'none'`), plus `X-Content-Type-Options`, `Referrer-Policy: no-referrer` and a minimal `Permissions-Policy`. HSTS is set only when a forwarded header says the request arrived over HTTPS, since sending it on loopback HTTP is meaningless. **Risk to check during implementation:** the Vite build may emit an inline module preload, which a strict `script-src 'self'` would block. If it does, the honest fix is a hashed allowance for that one script, not `unsafe-inline`, and it gets reported either way.
+
+There are no usernames, so account enumeration is moot; a failed pairing returns one generic error with the same shape whatever the reason. `createApp` gains injected clock and random so expiry, rotation and rate limiting are testable without waiting or flaking — the phase plan says `buildApp(deps)` with Fastify `inject()`, but this server is raw `node:http`, so the same idea is applied with the existing injection style. Cookies are parsed by a small hand-rolled reader rather than a new dependency, consistent with the rest of this server.
+
+### Deferred, and named so it is not mistaken for done
+
+Zod request and response schemas on every route, Pino with redaction of authorization, cookies and message content, request IDs, per-action rate limits beyond pairing, and the `audit_events` table. These are all part of TASK_013 as specified and none of them is authentication; the owner scoped this increment to the auth core on 2026-09-25.
+
+### How each PRD 5.2 requirement is met
+
+| Requirement | How |
+|---|---|
+| High entropy secret | 256-bit session token, 50-bit single-use pairing code |
+| Secure, HTTP only, same site cookie | All three set; `Secure` verified to work on loopback |
+| Expire | 90-day absolute, 14-day idle |
+| Logout and logout from all devices | `POST /api/logout`, `POST /api/logout-all` |
+| Rotate on login | A new row and a new token on every pairing |
+| Constant time verification | `timingSafeEqual` for code and CSRF token; sessions looked up by hash |
+| Rate limit login attempts | 5 per 15 minutes, and 5 failures destroy the code |
+| Avoid account enumeration | No usernames; one generic failure response |
+
+### Consequences worth knowing before approving
+
+Every existing server test and the browser smoke test will need to pair first, so this change touches a lot of test setup. The running dashboard will stop working until paired, and the first start after the upgrade prints a code. There is no bypass flag for local use, deliberately: a development bypass is exactly the thing that survives into production.
 
 ## Known provider limitations and unknowns
 

@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { PRODUCT_NAME } from '@quack/contracts';
-import { listSessions, openSession, sendTurn, type SavedSession } from './api.js';
+import {
+  listSessions,
+  logout,
+  openSession,
+  sendTurn,
+  startNewSession,
+  whoAmI,
+  type SavedSession,
+} from './api.js';
+import { PairingScreen } from './PairingScreen.js';
 
 interface Message {
   id: number;
@@ -20,6 +29,13 @@ export function App() {
   /** The stored conversation on screen, which survives a restart. */
   const [storedId, setStoredId] = useState<string | undefined>(undefined);
   const [saved, setSaved] = useState<SavedSession[]>([]);
+  /**
+   * Whether this browser is paired. Undefined while that is still unknown.
+   *
+   * Three states rather than a boolean, because rendering the login screen
+   * before the answer arrives would flash it at an owner who is already paired.
+   */
+  const [paired, setPaired] = useState<boolean | undefined>(undefined);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -30,11 +46,27 @@ export function App() {
     setSaved(await listSessions());
   }, []);
 
-  // The list is loaded once on arrival, so a reload lands on the history rather
-  // than on an empty page that implies nothing was ever said.
+  // Ask who we are first. The conversation list is only loaded once the answer
+  // is yes, so an unpaired browser makes one request and gets one answer rather
+  // than a page of refusals.
   useEffect(() => {
-    void refreshSaved();
+    void (async () => {
+      const me = await whoAmI();
+      setPaired(me !== undefined);
+      if (me !== undefined) await refreshSaved();
+    })();
   }, [refreshSaved]);
+
+  const signOut = useCallback(async (everywhere: boolean) => {
+    await logout(everywhere);
+    // Drop everything on screen: a transcript left visible after logging out
+    // would suggest the session is still live.
+    setPaired(false);
+    setMessages([]);
+    setSaved([]);
+    setSession(undefined);
+    setStoredId(undefined);
+  }, []);
 
   /** Replay a saved conversation into the transcript. */
   const open = useCallback(
@@ -116,12 +148,29 @@ export function App() {
   }, [draft, busy, storedId, refreshSaved]);
 
   const reset = useCallback(async () => {
-    await fetch('/api/session', { method: 'DELETE' });
+    await startNewSession();
     setSession(undefined);
     setStoredId(undefined);
     setMessages([]);
     void refreshSaved();
   }, [refreshSaved]);
+
+  // Nothing is rendered until the server has said whether this browser is
+  // paired, so the login screen never flashes past an owner who already is.
+  if (paired === undefined) {
+    return <div className="h-dvh bg-neutral-950" aria-busy="true" />;
+  }
+
+  if (!paired) {
+    return (
+      <PairingScreen
+        onPaired={() => {
+          setPaired(true);
+          void refreshSaved();
+        }}
+      />
+    );
+  }
 
   return (
     <div className="flex h-dvh flex-col bg-neutral-950 text-neutral-100">
@@ -143,6 +192,25 @@ export function App() {
             className="rounded border border-neutral-700 px-2 py-1 text-neutral-300 enabled:hover:border-neutral-500 disabled:opacity-40"
           >
             New session
+          </button>
+          <button
+            type="button"
+            onClick={() => void signOut(false)}
+            disabled={busy}
+            className="rounded border border-neutral-700 px-2 py-1 text-neutral-300 enabled:hover:border-neutral-500 disabled:opacity-40"
+          >
+            Log out
+          </button>
+          <button
+            type="button"
+            // The control for a device you no longer have. It ends every session,
+            // including this one, so the next start prints a fresh pairing code.
+            onClick={() => void signOut(true)}
+            disabled={busy}
+            title="End every paired session, on every device"
+            className="rounded border border-neutral-800 px-2 py-1 text-neutral-500 enabled:hover:border-red-500 enabled:hover:text-red-400 disabled:opacity-40"
+          >
+            Log out everywhere
           </button>
         </span>
       </header>

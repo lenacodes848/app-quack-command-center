@@ -2,7 +2,26 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { runClaudeTurn, type ClaudeEvent, type ClaudeTurnOptions } from '@quack/adapter';
-import type { Store } from '@quack/storage';
+import type { AppSessionRecord, Store } from '@quack/storage';
+import {
+  buildSessionCookie,
+  constantTimeEquals,
+  createPairingMode,
+  CSRF_COOKIE,
+  CSRF_HEADER,
+  deviceLabel,
+  generateToken,
+  hashToken,
+  IDLE_TTL_MS,
+  isSameOrigin,
+  parseCookies,
+  securityHeaders,
+  SESSION_COOKIE,
+  SESSION_TTL_MS,
+  TOUCH_INTERVAL_MS,
+  type PairingMode,
+  type RandomBytes,
+} from './auth.js';
 
 export type TurnRunner = (options: ClaudeTurnOptions) => AsyncGenerator<ClaudeEvent>;
 
@@ -20,6 +39,15 @@ export interface AppOptions {
    * can say so rather than implying the history is safe.
    */
   store?: Store | undefined;
+  /**
+   * The pairing window. Injected so tests can open it without reading a file.
+   * One is created with the real clock when this is omitted.
+   */
+  pairing?: PairingMode | undefined;
+  /** Injected so expiry can be tested without waiting for ninety days. */
+  now?: (() => number) | undefined;
+  /** Injected so a test can predict a token. */
+  randomBytes?: RandomBytes | undefined;
 }
 
 /** Largest prompt accepted, so a stray request cannot exhaust memory. */
@@ -152,24 +180,196 @@ async function streamTurn(
 export function createApp(options: AppOptions) {
   const runTurn = options.runTurn ?? runClaudeTurn;
   const store = options.store;
+  const now = options.now ?? (() => Date.now());
+  const pairing = options.pairing ?? createPairingMode({ now });
+  const randomBytes = options.randomBytes;
   /** The provider's conversation id for the open conversation. */
   let providerSessionId: string | undefined;
   /** Our own id for the open conversation, when there is a store. */
   let storedSessionId: string | undefined;
   let busy = false;
 
+  /**
+   * The session this request belongs to, or undefined.
+   *
+   * Looked up by the hash of the presented token, so nothing here compares
+   * secrets, and both expiry rules are applied by the store.
+   */
+  const authenticate = (request: IncomingMessage): AppSessionRecord | undefined => {
+    if (store === undefined) return undefined;
+    const token = parseCookies(request.headers.cookie).get(SESSION_COOKIE);
+    if (token === undefined || token === '') return undefined;
+
+    const at = now();
+    const session = store.findAppSession(
+      hashToken(token),
+      new Date(at).toISOString(),
+      new Date(at - IDLE_TTL_MS).toISOString(),
+    );
+    if (session === undefined) return undefined;
+
+    // Slide the idle window, but not on every single request: a busy session
+    // would otherwise cause a write per request for no benefit.
+    if (at - Date.parse(session.lastUsedAt) > TOUCH_INTERVAL_MS) {
+      store.touchAppSession(session.id, new Date(at).toISOString());
+    }
+    return session;
+  };
+
   return function handle(request: IncomingMessage, response: ServerResponse): void {
     void (async () => {
       const url = new URL(request.url ?? '/', 'http://localhost');
       const path = url.pathname;
 
+      // Set on everything, including refusals and static files: a header that
+      // only appears on success protects only the pages that did not need it.
+      const forwardedProto = request.headers['x-forwarded-proto'];
+      for (const [name, value] of Object.entries(
+        securityHeaders({ https: forwardedProto === 'https' }),
+      )) {
+        response.setHeader(name, value);
+      }
+
+      // Liveness only. Deliberately says nothing about whether anyone is paired
+      // or what is running, because it answers before authentication.
       if (path === '/api/health') {
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (path === '/api/pair') {
+        if (request.method !== 'POST') {
+          sendJson(response, 405, { error: 'Use POST.' });
+          return;
+        }
+        if (store === undefined) {
+          sendJson(response, 503, { error: 'This server cannot pair: no conversation store.' });
+          return;
+        }
+
+        let code: string;
+        try {
+          const parsed: unknown = JSON.parse(await readBody(request));
+          const value =
+            typeof parsed === 'object' && parsed !== null
+              ? (parsed as Record<string, unknown>)['code']
+              : undefined;
+          if (typeof value !== 'string') {
+            sendJson(response, 400, { error: 'Send { "code": "..." }.' });
+            return;
+          }
+          code = value;
+        } catch {
+          sendJson(response, 400, { error: 'Body must be JSON.' });
+          return;
+        }
+
+        const outcome = pairing.verify(code);
+        if (outcome === 'locked') {
+          sendJson(response, 429, { error: 'Too many attempts. Wait, then pair again.' });
+          return;
+        }
+        if (outcome !== 'ok') {
+          // One message for a wrong code and for pairing not being open, so a
+          // caller learns nothing about when to start guessing.
+          sendJson(response, 401, { error: 'Pairing failed.' });
+          return;
+        }
+
+        const at = now();
+        const token = generateToken(randomBytes);
+        const csrf = generateToken(randomBytes);
+        store.createAppSession({
+          tokenHash: hashToken(token),
+          label: deviceLabel(request.headers['user-agent']),
+          expiresAt: new Date(at + SESSION_TTL_MS).toISOString(),
+        });
+        // The CSRF token is not stored: it only ever has to match itself between
+        // a readable cookie and a header, which is what makes the pair useless
+        // to a site that can send neither.
+        response.setHeader('set-cookie', [
+          buildSessionCookie(token, SESSION_TTL_MS),
+          buildSessionCookie(csrf, SESSION_TTL_MS, { name: CSRF_COOKIE, httpOnly: false }),
+        ]);
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      // Everything past here needs a session, and a session can only exist when
+      // there is a store to have created it, which is why `store` is known to be
+      // present below.
+      const session = authenticate(request);
+      const isApi = path.startsWith('/api/');
+
+      if (isApi && (session === undefined || store === undefined)) {
+        sendJson(response, 401, { error: 'Not paired.' });
+        return;
+      }
+
+      // Anything that changes state must prove it came from the dashboard. The
+      // cookie is SameSite=Strict already; this is the layer that does not rely
+      // on the browser honouring that.
+      if (isApi && request.method !== 'GET' && request.method !== 'HEAD') {
+        const sameOrigin = isSameOrigin({
+          origin: request.headers.origin,
+          host: request.headers.host,
+          secFetchSite: request.headers['sec-fetch-site'],
+        });
+        const presented = request.headers[CSRF_HEADER];
+        const expected = parseCookies(request.headers.cookie).get(CSRF_COOKIE);
+        const tokenOk =
+          typeof presented === 'string' &&
+          expected !== undefined &&
+          expected !== '' &&
+          constantTimeEquals(presented, expected);
+
+        if (!sameOrigin || !tokenOk) {
+          sendJson(response, 403, { error: 'Request rejected.' });
+          return;
+        }
+      }
+
+      if (path === '/api/me' && request.method === 'GET') {
         sendJson(response, 200, {
-          ok: true,
+          paired: true,
+          device: session?.label ?? null,
+          persistent: store !== undefined,
           session: providerSessionId ?? null,
           storedSession: storedSessionId ?? null,
-          persistent: store !== undefined,
         });
+        return;
+      }
+
+      if (path === '/api/pairing-code' && request.method === 'POST') {
+        const code = pairing.open();
+        sendJson(response, 200, {
+          code,
+          expiresAt: new Date(pairing.expiresAt() ?? now()).toISOString(),
+        });
+        return;
+      }
+
+      if (path === '/api/logout' && request.method === 'POST') {
+        // `store` is present whenever a session is: the guard above returned 401
+        // otherwise. Written with `?.` because that is what the type system can
+        // see, rather than an assertion that could later become untrue quietly.
+        if (session !== undefined)
+          store?.revokeAppSession(session.id, new Date(now()).toISOString());
+        response.setHeader('set-cookie', [
+          buildSessionCookie('', 0),
+          buildSessionCookie('', 0, { name: CSRF_COOKIE, httpOnly: false }),
+        ]);
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (path === '/api/logout-all' && request.method === 'POST') {
+        store?.revokeAllAppSessions(new Date(now()).toISOString());
+        response.setHeader('set-cookie', [
+          buildSessionCookie('', 0),
+          buildSessionCookie('', 0, { name: CSRF_COOKIE, httpOnly: false }),
+        ]);
+        sendJson(response, 200, { ok: true });
         return;
       }
 

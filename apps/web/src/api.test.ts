@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'vitest';
-import { listSessions, openSession, parseTurnEvent, sendTurn, toLines } from './api.js';
+import {
+  csrfToken,
+  listSessions,
+  openSession,
+  pair,
+  parseTurnEvent,
+  sendTurn,
+  toLines,
+  whoAmI,
+} from './api.js';
 
 async function* chunks(...values: string[]): AsyncGenerator<string> {
   for (const value of values) {
@@ -178,6 +187,101 @@ describe('sendTurn', () => {
       >;
       expect(body).toEqual({ text: 'a fresh start' });
       expect('sessionId' in body).toBe(false);
+    } finally {
+      fake.restore();
+    }
+  });
+});
+
+describe('the CSRF token', () => {
+  test('is read from the cookie the server set', () => {
+    expect(csrfToken('quack_csrf=abc123; other=x')).toBe('abc123');
+  });
+
+  test('is absent rather than wrong when there is no cookie', () => {
+    expect(csrfToken('')).toBeUndefined();
+    expect(csrfToken('other=x')).toBeUndefined();
+  });
+});
+
+describe('pairing from the browser', () => {
+  test('sends the code the owner typed', async () => {
+    const fake = captureFetch({ body: { ok: true } });
+    try {
+      expect(await pair('7H2K-9QMR-4B')).toBe('paired');
+      expect(fake.calls[0]?.url).toBe('/api/pair');
+      const body = JSON.parse((fake.calls[0]?.init?.body ?? '{}') as string) as {
+        code: string;
+      };
+      expect(body.code).toBe('7H2K-9QMR-4B');
+    } finally {
+      fake.restore();
+    }
+  });
+
+  test('reports a refused code without pretending it worked', async () => {
+    const fake = captureFetch({ status: 401, body: { error: 'Pairing failed.' } });
+    try {
+      expect(await pair('wrong')).toBe('rejected');
+    } finally {
+      fake.restore();
+    }
+  });
+
+  test('distinguishes being locked out, because the advice differs', async () => {
+    // A wrong code means try again; too many attempts means wait. Telling the
+    // owner to retry when retrying cannot work is worse than saying nothing.
+    const fake = captureFetch({ status: 429, body: { error: 'Too many attempts.' } });
+    try {
+      expect(await pair('wrong')).toBe('locked');
+    } finally {
+      fake.restore();
+    }
+  });
+});
+
+describe('whoAmI', () => {
+  test('reports a paired browser', async () => {
+    const fake = captureFetch({ body: { paired: true, device: 'Mac', persistent: true } });
+    try {
+      const me = await whoAmI();
+      expect(fake.calls[0]?.url).toBe('/api/me');
+      expect(me?.device).toBe('Mac');
+    } finally {
+      fake.restore();
+    }
+  });
+
+  test('reports an unpaired browser as absent, which is what shows the login screen', async () => {
+    const fake = captureFetch({ status: 401, body: { error: 'Not paired.' } });
+    try {
+      expect(await whoAmI()).toBeUndefined();
+    } finally {
+      fake.restore();
+    }
+  });
+});
+
+describe('state-changing requests', () => {
+  test('carry the CSRF header, or the server rejects them', async () => {
+    const fake = captureFetch({ body: {} });
+    try {
+      const events = sendTurn('hello', { csrf: 'token-from-cookie' });
+      await events.next();
+      const headers = new Headers(fake.calls[0]?.init?.headers);
+      expect(headers.get('x-csrf-token')).toBe('token-from-cookie');
+    } finally {
+      fake.restore();
+    }
+  });
+
+  test('a turn refused for want of pairing says so plainly', async () => {
+    // The owner needs to know to log in again, not see a raw status code.
+    const fake = captureFetch({ status: 401, body: { error: 'Not paired.' } });
+    try {
+      const events = sendTurn('hello');
+      const first = await events.next();
+      expect(first.value).toEqual({ type: 'error', message: 'Not paired.' });
     } finally {
       fake.restore();
     }

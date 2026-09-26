@@ -115,10 +115,94 @@ export async function openSession(id: string): Promise<OpenedSession | undefined
   }
 }
 
+/**
+ * The CSRF token the server issued, read from its cookie.
+ *
+ * That cookie is deliberately readable by scripts: the whole double-submit
+ * scheme is that the page can echo it in a header while a site that is not this
+ * page can do neither.
+ */
+export function csrfToken(
+  cookies: string = typeof document === 'undefined' ? '' : document.cookie,
+): string | undefined {
+  for (const part of cookies.split(';')) {
+    const at = part.indexOf('=');
+    if (at < 1) continue;
+    if (part.slice(0, at).trim() === 'quack_csrf') return part.slice(at + 1).trim();
+  }
+  return undefined;
+}
+
+export type PairOutcome = 'paired' | 'rejected' | 'locked' | 'unavailable';
+
+/**
+ * Exchange a pairing code for a session.
+ *
+ * The three failures are kept apart because the advice differs: a wrong code
+ * means try again, a lockout means wait, and an unreachable server means neither.
+ */
+export async function pair(code: string): Promise<PairOutcome> {
+  try {
+    const response = await fetch('/api/pair', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    if (response.ok) return 'paired';
+    if (response.status === 429) return 'locked';
+    if (response.status === 401) return 'rejected';
+    return 'unavailable';
+  } catch {
+    return 'unavailable';
+  }
+}
+
+export interface Me {
+  paired: boolean;
+  device: string | null;
+  persistent: boolean;
+}
+
+/** Who the server thinks we are, or undefined when this browser is not paired. */
+export async function whoAmI(): Promise<Me | undefined> {
+  try {
+    const response = await fetch('/api/me');
+    if (!response.ok) return undefined;
+    return (await response.json()) as Me;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Start a new conversation.
+ *
+ * Goes through here rather than a bare `fetch` so it carries the CSRF token;
+ * without it the server refuses the request, which is how this was found.
+ */
+export async function startNewSession(): Promise<void> {
+  const token = csrfToken();
+  await fetch('/api/session', {
+    method: 'DELETE',
+    headers: token === undefined ? {} : { 'x-csrf-token': token },
+  });
+}
+
+/** Log out. `everywhere` also ends sessions on devices you no longer have. */
+export async function logout(everywhere = false): Promise<void> {
+  const token = csrfToken();
+  await fetch(everywhere ? '/api/logout-all' : '/api/logout', {
+    method: 'POST',
+    headers: token === undefined ? {} : { 'x-csrf-token': token },
+  }).catch(() => undefined);
+}
+
 export interface SendTurnOptions {
   /** The stored conversation to continue. Omit to start a new one. */
   sessionId?: string | undefined;
   signal?: AbortSignal | undefined;
+  /** Overrides the token read from the cookie. For tests. */
+  csrf?: string | undefined;
 }
 
 /** Send a message and stream the turn's events as they arrive. */
@@ -126,9 +210,15 @@ export async function* sendTurn(
   text: string,
   options: SendTurnOptions = {},
 ): AsyncGenerator<TurnEvent> {
+  const token = options.csrf ?? csrfToken();
   const response = await fetch('/api/turn', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      // Without this the server refuses the request: it is the layer that does
+      // not depend on the browser honouring SameSite.
+      ...(token === undefined ? {} : { 'x-csrf-token': token }),
+    },
     body: JSON.stringify(
       options.sessionId === undefined ? { text } : { text, sessionId: options.sessionId },
     ),

@@ -80,7 +80,7 @@ Lint and format on variant A: ESLint 10.11.0, `@eslint/js` 10.0.1, typescript-es
 
 - Server binds to loopback. Remote access, when built, is Cloudflare Access at the edge plus an application session at the origin.
 - Working directories are restricted to configured roots, resolved through symlinks. Roots are changed locally only, and no API route edits them.
-- Device pairing design: **written 2026-09-25, awaiting the owner's approval.** The full design is the section "Device pairing design (TASK_013)" below. No authentication code is written until that approval is recorded here.
+- Device pairing design: **approved by the owner 2026-09-25.** The full design is the section "Device pairing design (TASK_013)" below.
 - Secret scanning: CI installs a pinned gitleaks (version and SHA-256 in `.github/workflows/secrets.yml`, checksum taken from the official release and matched against a separate download, and the version must equal the one recorded above) and runs `npm run scan:secrets` (full working tree) and `npm run scan:secrets:history` (full history) with the same scripts a developer runs. The history script fails when gitleaks reports zero commits scanned. The workflow token is read only (`contents: read`). The `gitleaks/gitleaks-action` action is not used, see Failed approaches.
 - Source protection: `scripts/source-protection-scan.mjs` fails on absolute macOS or Linux home directory paths that include a user name (with or without a trailing slash), on email addresses other than the reserved example domains, GitHub's noreply forms and the SSH remote form (user `git` at a host), and on any entry in the local, gitignored `.source-protection-denylist`. Tilde paths such as `~/Downloads/1-git` are deliberately allowed because they name no user, so the worksheet can name the projects directory. It prints file, line and rule, never the matched text.
 - Source protection also scans **commit metadata** — author and committer name and email — not only file content. Added 2026-09-25 after the repository was made public with a personal name and address sitting in the author field of 30 of 36 commits while every check was green.
@@ -89,7 +89,7 @@ Lint and format on variant A: ESLint 10.11.0, `@eslint/js` 10.0.1, typescript-es
 
 ## Device pairing design (TASK_013)
 
-**Status: written 2026-09-25, NOT YET APPROVED.** The PRD (5.2) and the phase plan both require the owner's explicit approval of this design before any authentication code exists. When approval is given, record it on this line with the date.
+**Status: APPROVED by the owner on 2026-09-25**, with one revision to the draft: session lifetimes are 90 days absolute and 14 days idle, up from 30 and 7. Implementation began the same day. The PRD (5.2) and the phase plan require this approval before any authentication code exists, so this line is the record of it.
 
 ### What problem this solves, and what it does not
 

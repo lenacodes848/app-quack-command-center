@@ -5,6 +5,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadServerEnv, type ServerEnv } from '@quack/config';
 import { PRODUCT_NAME } from '@quack/contracts';
 import { openStore } from '@quack/storage';
+import { createPairingMode } from './auth.js';
+import { publishPairingCode } from './pairingFile.js';
 import { createApp } from './app.js';
 
 export function describeStartup(env: ServerEnv): string {
@@ -37,6 +39,27 @@ function builtWebDir(): string | undefined {
   const here = dirname(fileURLToPath(import.meta.url));
   const candidate = resolve(here, '..', '..', 'web', 'dist');
   return candidate;
+}
+
+/** Where the pairing code is written while it is valid. */
+export function pairingCodePath(env: ServerEnv): string {
+  return join(env.DATA_DIR, 'pairing-code');
+}
+
+/**
+ * Decide whether to offer pairing when the server starts.
+ *
+ * Offered when no browser could get in anyway, so a first run — or a run after
+ * logging out everywhere — hands the owner a code without being asked. Not
+ * offered when a paired device already exists, because printing a live
+ * credential at every restart is a standing invitation. `QUACK_PAIR=1` forces it,
+ * which is the way back in after losing every paired device.
+ */
+export function shouldOfferPairing(
+  activeSessions: number,
+  raw: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return activeSessions === 0 || raw['QUACK_PAIR'] === '1';
 }
 
 /** How long a shutdown waits for open connections before stopping anyway. */
@@ -90,12 +113,23 @@ export function start(env: ServerEnv): ReturnType<typeof createServer> {
 
   const store = openStore(databasePath(env));
 
+  // The code is announced only when a terminal is watching. A background service
+  // logs to a file, and a live credential does not belong in a log.
+  const pairing = publishPairingCode({
+    pairing: createPairingMode({ now: () => Date.now() }),
+    path: pairingCodePath(env),
+    print: (line) => {
+      if (process.stdout.isTTY) console.log(line);
+    },
+  });
+
   const server = createServer(
     createApp({
       workspaceDir: workspace,
       webDir: builtWebDir(),
       runTurn: undefined,
       store,
+      pairing,
     }),
   );
 
@@ -131,6 +165,16 @@ export function start(env: ServerEnv): ReturnType<typeof createServer> {
     console.log(`${PRODUCT_NAME} on http://${env.HOST}:${String(env.PORT)}`);
     console.log(`Agent workspace: ${workspace}`);
     console.log(`Conversations: ${databasePath(env)}`);
+
+    const active = store.countActiveAppSessions(new Date().toISOString());
+    if (shouldOfferPairing(active)) {
+      // open() writes the file and prints the code through the callback above.
+      pairing.open();
+    } else {
+      console.log(
+        `${String(active)} paired device(s). Pair another from one of them, or restart with QUACK_PAIR=1.`,
+      );
+    }
   });
 
   return server;

@@ -45,7 +45,7 @@ export default defineConfig({
       // tests; adding them here would be scope creep. Named explicitly rather
       // than left to a .ts glob that excludes .tsx by accident.
       include: ['packages/*/src/**/*.ts', 'apps/server/src/**/*.ts'],
-      exclude: ['**/*.test.ts', '**/dist/**'],
+      exclude: ['**/*.test.ts', '**/dist/**', 'apps/server/src/testkit.ts'],
       thresholds: {
         lines: 80,
         functions: 80,

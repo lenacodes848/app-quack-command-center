@@ -1,11 +1,10 @@
-import { createServer, type Server } from 'node:http';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, test } from 'vitest';
 import type { ClaudeEvent, ClaudeTurnOptions } from '@quack/adapter';
-import { createApp, resolveStaticPath, type TurnRunner } from './app.js';
+import { resolveStaticPath, type TurnRunner } from './app.js';
+import { startPaired, type StartPairedOptions } from './testkit.js';
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -20,15 +19,33 @@ function scratch(): string {
   return dir;
 }
 
-async function serve(app: ReturnType<typeof createApp>): Promise<string> {
-  const server: Server = createServer(app);
-  await new Promise<void>((r) => {
-    server.listen(0, '127.0.0.1', r);
-  });
+/**
+ * Start a paired server and make this suite's `fetch` authenticated.
+ *
+ * Every route that does anything now needs a session, and these tests are about
+ * the routes rather than about authentication — that is `authRoutes.test.ts`.
+ * So the helper pairs, then wraps `fetch` to attach the session cookie, the CSRF
+ * header and a same-origin `Origin` for requests to this server. Requests
+ * anywhere else pass through untouched, and the original is restored afterwards.
+ *
+ * The wrapper is deliberately narrow: it adds credentials and nothing else, so a
+ * test that checks a status code is still checking the real route.
+ */
+async function serve(options: Omit<StartPairedOptions, 'dataDir'>): Promise<string> {
+  const paired = await startPaired({ ...options, dataDir: scratch() });
+  cleanups.push(paired.close);
+
+  const original = globalThis.fetch;
   cleanups.push(() => {
-    server.close();
+    globalThis.fetch = original;
   });
-  return `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`;
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url;
+    if (!url.startsWith(paired.base)) return original(input, init);
+    return paired.call(url.slice(paired.base.length), init);
+  };
+
+  return paired.base;
 }
 
 /** A runner that emits a fixed script and records how it was called. */
@@ -55,15 +72,20 @@ async function readNdjson(response: Response): Promise<unknown[]> {
 }
 
 describe('health', () => {
-  test('reports no session before anything has run', async () => {
-    const base = await serve(createApp({ workspaceDir: scratch() }));
-    expect(await (await fetch(`${base}/api/health`)).json()).toEqual({
-      ok: true,
+  test('answers liveness only, because it answers before authentication', async () => {
+    // It used to report the open session and whether anything was being saved.
+    // Now that it is reachable unauthenticated, saying any of that would tell an
+    // unpaired caller about the owner's state; `/api/me` carries it instead.
+    const base = await serve({ workspaceDir: scratch() });
+    expect(await (await fetch(`${base}/api/health`)).json()).toEqual({ ok: true });
+  });
+
+  test('reports no conversation open before anything has run', async () => {
+    const base = await serve({ workspaceDir: scratch() });
+    expect(await (await fetch(`${base}/api/me`)).json()).toMatchObject({
+      paired: true,
       session: null,
       storedSession: null,
-      // Built with no store, so it says plainly that nothing is being saved
-      // rather than letting the browser imply the history is safe.
-      persistent: false,
     });
   });
 });
@@ -75,7 +97,7 @@ describe('a turn', () => {
       { type: 'text', text: 'Quack.' },
       { type: 'result', text: 'Quack.', isError: false },
     ]);
-    const base = await serve(createApp({ workspaceDir: scratch(), runTurn: run }));
+    const base = await serve({ workspaceDir: scratch(), runTurn: run });
 
     const response = await fetch(`${base}/api/turn`, {
       method: 'POST',
@@ -96,7 +118,7 @@ describe('a turn', () => {
       { type: 'session', sessionId: 'keep-me', model: undefined },
       { type: 'result', text: 'ok', isError: false },
     ]);
-    const base = await serve(createApp({ workspaceDir: scratch(), runTurn: run }));
+    const base = await serve({ workspaceDir: scratch(), runTurn: run });
 
     const send = async (text: string): Promise<void> => {
       const r = await fetch(`${base}/api/turn`, { method: 'POST', body: JSON.stringify({ text }) });
@@ -108,13 +130,13 @@ describe('a turn', () => {
 
     expect(calls[0]?.sessionId).toBeUndefined();
     expect(calls[1]?.sessionId).toBe('keep-me');
-    expect(await (await fetch(`${base}/api/health`)).json()).toMatchObject({ session: 'keep-me' });
+    expect(await (await fetch(`${base}/api/me`)).json()).toMatchObject({ session: 'keep-me' });
   });
 
   test('runs the agent in the configured workspace, not the server directory', async () => {
     const workspace = scratch();
     const { run, calls } = fakeRunner([{ type: 'result', text: 'ok', isError: false }]);
-    const base = await serve(createApp({ workspaceDir: workspace, runTurn: run }));
+    const base = await serve({ workspaceDir: workspace, runTurn: run });
 
     await (
       await fetch(`${base}/api/turn`, { method: 'POST', body: JSON.stringify({ text: 'hi' }) })
@@ -132,7 +154,7 @@ describe('a turn', () => {
       await gate;
       yield { type: 'result', text: 'done', isError: false };
     };
-    const base = await serve(createApp({ workspaceDir: scratch(), runTurn: run }));
+    const base = await serve({ workspaceDir: scratch(), runTurn: run });
 
     const first = fetch(`${base}/api/turn`, {
       method: 'POST',
@@ -152,7 +174,7 @@ describe('a turn', () => {
 
   test('frees the slot once a turn finishes, so the next one is accepted', async () => {
     const { run } = fakeRunner([{ type: 'result', text: 'ok', isError: false }]);
-    const base = await serve(createApp({ workspaceDir: scratch(), runTurn: run }));
+    const base = await serve({ workspaceDir: scratch(), runTurn: run });
 
     for (const text of ['one', 'two']) {
       const r = await fetch(`${base}/api/turn`, { method: 'POST', body: JSON.stringify({ text }) });
@@ -167,13 +189,13 @@ describe('a turn', () => {
     ['a non-string message', JSON.stringify({ text: 42 })],
     ['a body that is not JSON', 'nonsense'],
   ])('rejects %s with 400', async (_label, body) => {
-    const base = await serve(createApp({ workspaceDir: scratch() }));
+    const base = await serve({ workspaceDir: scratch() });
     const response = await fetch(`${base}/api/turn`, { method: 'POST', body });
     expect(response.status).toBe(400);
   });
 
   test('rejects a GET with 405', async () => {
-    const base = await serve(createApp({ workspaceDir: scratch() }));
+    const base = await serve({ workspaceDir: scratch() });
     expect((await fetch(`${base}/api/turn`)).status).toBe(405);
   });
 });
@@ -184,7 +206,7 @@ describe('clearing the session', () => {
       { type: 'session', sessionId: 'old', model: undefined },
       { type: 'result', text: 'ok', isError: false },
     ]);
-    const base = await serve(createApp({ workspaceDir: scratch(), runTurn: run }));
+    const base = await serve({ workspaceDir: scratch(), runTurn: run });
 
     await (
       await fetch(`${base}/api/turn`, { method: 'POST', body: JSON.stringify({ text: 'a' }) })
@@ -202,7 +224,7 @@ describe('serving the built web app', () => {
   test('serves index.html at the root and falls back for client routes', async () => {
     const webDir = scratch();
     writeFileSync(join(webDir, 'index.html'), '<!doctype html><title>Quack</title>', 'utf8');
-    const base = await serve(createApp({ workspaceDir: scratch(), webDir }));
+    const base = await serve({ workspaceDir: scratch(), webDir });
 
     for (const path of ['/', '/some/client/route']) {
       const response = await fetch(`${base}${path}`);
@@ -214,7 +236,7 @@ describe('serving the built web app', () => {
   test('an api path is never served from disk', async () => {
     const webDir = scratch();
     writeFileSync(join(webDir, 'index.html'), 'page', 'utf8');
-    const base = await serve(createApp({ workspaceDir: scratch(), webDir }));
+    const base = await serve({ workspaceDir: scratch(), webDir });
     expect((await fetch(`${base}/api/unknown`)).status).toBe(404);
   });
 });
@@ -258,7 +280,7 @@ describe('when a turn fails mid-stream', () => {
       await Promise.resolve();
       throw new Error('the provider died');
     };
-    const base = await serve(createApp({ workspaceDir: scratch(), runTurn: run }));
+    const base = await serve({ workspaceDir: scratch(), runTurn: run });
 
     const response = await fetch(`${base}/api/turn`, {
       method: 'POST',
@@ -282,7 +304,7 @@ describe('when a turn fails mid-stream', () => {
       throw 'just a string';
     };
     /* eslint-enable require-yield, @typescript-eslint/only-throw-error */
-    const base = await serve(createApp({ workspaceDir: scratch(), runTurn: run }));
+    const base = await serve({ workspaceDir: scratch(), runTurn: run });
     const response = await fetch(`${base}/api/turn`, {
       method: 'POST',
       body: JSON.stringify({ text: 'hi' }),
@@ -298,7 +320,7 @@ describe('when a turn fails mid-stream', () => {
       if (calls === 1) throw new Error('boom');
       yield { type: 'result', text: 'recovered', isError: false };
     };
-    const base = await serve(createApp({ workspaceDir: scratch(), runTurn: run }));
+    const base = await serve({ workspaceDir: scratch(), runTurn: run });
 
     await (
       await fetch(`${base}/api/turn`, { method: 'POST', body: JSON.stringify({ text: 'a' }) })

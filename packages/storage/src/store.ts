@@ -9,7 +9,7 @@ import Database from 'better-sqlite3';
  * Kept in SQLite's own `user_version` rather than a table of our own, so the
  * version travels with the file and cannot disagree with it.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /**
  * Ordered migrations. Index 0 takes an empty database to version 1.
@@ -47,6 +47,24 @@ const MIGRATIONS: readonly string[] = [
 
   CREATE INDEX normalized_messages_by_session
     ON normalized_messages (session_id, seq);
+  `,
+
+  // Version 2: application sessions, for device pairing. The PRD's data model
+  // (3.6) has no table for these, so TASK_013 adds one. It holds no credential:
+  // only the SHA-256 hash of a session token, so reading this file yields
+  // nothing that can be replayed as a cookie.
+  `
+  CREATE TABLE app_sessions (
+    id           TEXT PRIMARY KEY,
+    token_hash   TEXT NOT NULL UNIQUE,
+    label        TEXT,
+    created_at   TEXT NOT NULL,
+    last_used_at TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    revoked_at   TEXT
+  ) STRICT;
+
+  CREATE INDEX app_sessions_by_token ON app_sessions (token_hash);
   `,
 ];
 
@@ -155,6 +173,45 @@ export function titleFrom(content: string): string {
   return `${body.trimEnd()}…`;
 }
 
+/** One paired browser. Holds no credential, only the hash of one. */
+export interface AppSessionRecord {
+  id: string;
+  /** SHA-256 of the session token. The token itself is never stored. */
+  tokenHash: string;
+  label: string | undefined;
+  createdAt: string;
+  lastUsedAt: string;
+  expiresAt: string;
+}
+
+export interface CreateAppSessionInput {
+  tokenHash: string;
+  /** A short, sanitised hint about the device, for the owner's own benefit. */
+  label: string | null;
+  expiresAt: string;
+}
+
+interface AppSessionRow {
+  id: string;
+  token_hash: string;
+  label: string | null;
+  created_at: string;
+  last_used_at: string;
+  expires_at: string;
+  revoked_at: string | null;
+}
+
+function toAppSession(row: AppSessionRow): AppSessionRecord {
+  return {
+    id: row.id,
+    tokenHash: row.token_hash,
+    label: row.label ?? undefined,
+    createdAt: row.created_at,
+    lastUsedAt: row.last_used_at,
+    expiresAt: row.expires_at,
+  };
+}
+
 export interface Store {
   schemaVersion(): number;
   pragma(name: string): unknown;
@@ -167,6 +224,27 @@ export interface Store {
   recordProviderSession(id: string, input: RecordProviderSessionInput): void;
   appendMessage(sessionId: string, input: AppendMessageInput): MessageRecord;
   listMessages(sessionId: string): MessageRecord[];
+
+  /** Store a paired browser. `tokenHash` is a hash; never pass a token. */
+  createAppSession(input: CreateAppSessionInput): AppSessionRecord;
+  /**
+   * Look up a live session by token hash.
+   *
+   * Returns nothing when the session is unknown, revoked, past `expires_at`, or
+   * — when `idleCutoff` is given — last used before that moment.
+   */
+  findAppSession(tokenHash: string, now: string, idleCutoff?: string): AppSessionRecord | undefined;
+  /** Move a session's idle deadline forward. */
+  touchAppSession(id: string, at: string): void;
+  revokeAppSession(id: string, at: string): void;
+  /** Revoke every session. The control for a lost device. */
+  revokeAllAppSessions(at: string): void;
+  /** How many sessions could still log in, which decides whether to offer pairing. */
+  countActiveAppSessions(now: string): number;
+
+  /** Every stored value as text. For tests that assert a secret is absent. */
+  debugDump(): string;
+
   close(): void;
 }
 
@@ -240,6 +318,30 @@ export function openStore(path: string, options: OpenStoreOptions = {}): Store {
     `UPDATE agent_sessions SET title = ? WHERE id = ? AND title IS NULL`,
   );
 
+  const insertAppSession = db.prepare<[string, string, string | null, string, string, string]>(
+    `INSERT INTO app_sessions (id, token_hash, label, created_at, last_used_at, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  // Revoked and expired sessions are filtered in SQL, so a caller cannot forget
+  // to check either one.
+  const selectAppSession = db.prepare<[string, string]>(
+    `SELECT * FROM app_sessions
+      WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?`,
+  );
+  const touchAppSession = db.prepare<[string, string]>(
+    `UPDATE app_sessions SET last_used_at = ? WHERE id = ?`,
+  );
+  const revokeAppSession = db.prepare<[string, string]>(
+    `UPDATE app_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`,
+  );
+  const revokeAllAppSessions = db.prepare<[string]>(
+    `UPDATE app_sessions SET revoked_at = ? WHERE revoked_at IS NULL`,
+  );
+  const countAppSessions = db.prepare<[string]>(
+    `SELECT COUNT(*) AS count FROM app_sessions
+      WHERE revoked_at IS NULL AND expires_at > ?`,
+  );
+
   /**
    * Append a message, bump the session and name it if it has no name yet.
    *
@@ -302,6 +404,53 @@ export function openStore(path: string, options: OpenStoreOptions = {}): Store {
     appendMessage: (sessionId, input) => appendMessage(sessionId, input),
 
     listMessages: (sessionId) => (selectMessages.all(sessionId) as MessageRow[]).map(toMessage),
+
+    createAppSession(input) {
+      const stamp = now();
+      const id = randomUUID();
+      insertAppSession.run(id, input.tokenHash, input.label, stamp, stamp, input.expiresAt);
+      return {
+        id,
+        tokenHash: input.tokenHash,
+        label: input.label ?? undefined,
+        createdAt: stamp,
+        lastUsedAt: stamp,
+        expiresAt: input.expiresAt,
+      };
+    },
+
+    findAppSession(tokenHash, at, idleCutoff) {
+      const row = selectAppSession.get(tokenHash, at) as AppSessionRow | undefined;
+      if (row === undefined) return undefined;
+      // The idle rule is applied here rather than in SQL so that "no idle limit"
+      // is expressible without a second query.
+      if (idleCutoff !== undefined && row.last_used_at < idleCutoff) return undefined;
+      return toAppSession(row);
+    },
+
+    touchAppSession(id, at) {
+      touchAppSession.run(at, id);
+    },
+
+    revokeAppSession(id, at) {
+      revokeAppSession.run(at, id);
+    },
+
+    revokeAllAppSessions(at) {
+      revokeAllAppSessions.run(at);
+    },
+
+    countActiveAppSessions(at) {
+      const row = countAppSessions.get(at) as { count: number };
+      return row.count;
+    },
+
+    debugDump: () =>
+      JSON.stringify([
+        selectSessions.all(),
+        db.prepare('SELECT * FROM normalized_messages').all(),
+        db.prepare('SELECT * FROM app_sessions').all(),
+      ]),
 
     close: () => {
       db.close();

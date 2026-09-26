@@ -27,15 +27,45 @@ const SAVED_SESSIONS = {
   ],
 };
 
-test('the built web app renders the command center shell with a clean console', async ({
-  page,
-}) => {
+/** Watch for anything the browser complains about, including CSP violations. */
+function watchConsole(page: import('@playwright/test').Page): string[] {
   const problems: string[] = [];
   page.on('console', (message) => {
     if (message.type() === 'error') problems.push(`console error: ${message.text()}`);
   });
   page.on('pageerror', (error) => problems.push(`page error: ${error.message}`));
+  return problems;
+}
 
+test('an unpaired browser is shown the pairing screen, not the dashboard', async ({ page }) => {
+  // The security property, seen from the outside: without a session the page
+  // offers a login box and no conversation.
+  const problems = watchConsole(page);
+  await page.route('**/api/me', (route) =>
+    route.fulfill({ status: 401, json: { error: 'Not paired.' } }),
+  );
+
+  await page.goto('/');
+
+  await expect(page.getByLabel('Pairing code')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Pair this device' })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Saved conversations' })).toHaveCount(0);
+
+  // The browser logs every non-2xx fetch as a console error, and the 401 here is
+  // the correct answer to an unpaired browser asking who it is. Anything else —
+  // a script error, a content-security-policy violation — still fails.
+  const unexpected = problems.filter((problem) => !problem.includes('401'));
+  expect(unexpected, 'the pairing screen must load cleanly').toEqual([]);
+});
+
+test('the built web app renders the command center shell with a clean console', async ({
+  page,
+}) => {
+  const problems = watchConsole(page);
+
+  await page.route('**/api/me', (route) =>
+    route.fulfill({ json: { paired: true, device: 'Mac', persistent: true } }),
+  );
   await page.route('**/api/sessions', (route) =>
     route.fulfill({ json: SAVED_SESSIONS, headers: { 'content-type': 'application/json' } }),
   );

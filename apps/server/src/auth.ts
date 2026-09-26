@@ -216,6 +216,37 @@ export function buildSessionCookie(
   return parts.join('; ');
 }
 
+/**
+ * Whether the address this request arrived on can keep a `Secure` cookie.
+ *
+ * The session cookie is `Secure`, which is right for the tunnel and costs
+ * nothing on loopback — a loopback address counts as a trustworthy origin, so
+ * browsers honour it over plain HTTP there, which was verified in a real
+ * browser. The case in between is the one a phone hits first: a bare LAN
+ * address like `http://192.168.1.20:4317` is *not* trustworthy, so the browser
+ * accepts the response and silently discards the cookie. Pairing then appears
+ * to succeed and the next request arrives with nothing, bouncing back to the
+ * login screen with the single-use code already spent.
+ *
+ * Answering that case honestly is better than issuing a cookie that cannot
+ * stick, so the pairing route checks this first.
+ */
+export function canHoldSecureCookie(request: {
+  host: string | undefined;
+  forwardedProto: string | undefined;
+}): boolean {
+  // A proxy terminating HTTPS is the intended path, and then any host is fine.
+  if (request.forwardedProto === 'https') return true;
+  if (request.host === undefined || request.host === '') return false;
+
+  // Strip the port, and the brackets around an IPv6 literal.
+  const host = request.host
+    .replace(/:\d+$/u, '')
+    .replace(/^\[|\]$/gu, '')
+    .toLowerCase();
+  return host === 'localhost' || host === '::1' || host === '127.0.0.1' || /^127\./u.test(host);
+}
+
 export interface OriginCheck {
   origin?: string | undefined;
   host?: string | undefined;

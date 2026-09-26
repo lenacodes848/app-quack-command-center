@@ -281,3 +281,51 @@ Also corrected, both statements of mine that had become false rather than new wo
 Evidence: `npm run validate` exits 0 with no warnings. 220 unit tests, 10 integration, 84 repository, 2 browser. Branch coverage 84.57 percent. Scans clean over 61 commits.
 
 Not addressed here, deliberately: issues #27, #28, #29, #31, #32, #34. #31 (the pairing route is exempt from the same-origin check) and #29 (a `Secure` cookie cannot work over plain HTTP on a non-loopback address) are the two worth reading first, because both touch the authentication that just landed.
+
+## 2026-09-26 (four reported bugs, plus two stale-documentation issues)
+
+#26 merged. Of the fourteen open issues, four were labelled `bug`; those plus the two documentation issues that asserted false things are fixed here. The remaining eight are enhancements and were deliberately left.
+
+**Grouping decision: one pull request, one commit per issue where that was possible.** All four bugs touch `apps/server/src/app.ts` and three touch the same handler, so separate branches off `main` would have conflicted with each other — and `research.md` already records that stacked pull requests do not retarget when the parent merges, which bit this project once. The owner reviews commit by commit, which is the reviewability that actually matters here.
+
+One deviation from that, stated rather than hidden: #32 and #35 landed in a single commit. Both change the same handler and their tests share one file, so splitting them would have left an intermediate commit whose own tests fail, which is worse than a slightly wider commit.
+
+**#32 — an oversized body blamed the JSON.** `readBody` threw a plain `Error`, and both call sites read the body inside the `try` whose `catch` exists for `JSON.parse`. A valid body over 100 kB — a pasted log, a stack trace — came back as *"Body must be JSON."*, sending the owner after a syntax error that was not there and never mentioning that a limit exists. A distinct `BodyTooLargeError` separates them and an oversized body answers 413 naming the limit; the constant is exported so the test asserts the real number rather than restating it. Both routes read bodies this way, and a test pins that the refusal still releases the turn slot.
+
+**#35 — a turn cut short was stored as though complete.** After the client vanished, `streamTurn` broke out of the loop and fell through to the same tail as a normal turn, so whatever had streamed was appended as an ordinary agent message. Reopening a conversation showed a confident half-sentence indistinguishable from a complete short answer, and the agent's own context and the stored transcript disagreed about what was said, because the next turn resumes by provider session id. What streamed is still kept — it is a real part of the conversation — but the message now ends with a note that the connection was lost. Taken over a schema column because `normalized_messages` would need a migration and the UI a new state; the comment says where the column goes if interrupted turns later need rendering differently.
+
+**#30 — a mode that could not work.** `AppOptions.store` was optional and documented as a way to run without persistence. That stopped being true when authentication landed: sessions live in the store, so `authenticate()` returned undefined without one and the guard refused every `/api` path — a server that served the static page and a liveness probe and nothing else, with no route to a turn, which is the only thing the mode existed for. Requiring it removed the undefined check, an unreachable 503 branch, the store half of the auth guard, and six optional-chain call sites. It also removed `persistent` from `/api/me`, which reported whether a store existed and was unobservable in exactly the mode it described, and the web client's `Me` field that nothing rendered. The refactor then exposed a guard TypeScript could prove redundant, which became `??=`.
+
+**#29 — pairing from a LAN address appeared to work and then failed.** The session cookie is `Secure`, right for the tunnel and free on loopback, which browsers count as trustworthy. The case in between is the one a phone hits first: on `http://192.168.x.x:4317` the browser accepts the response and silently discards the cookie, so pairing answered 200, the dashboard rendered, the next request carried nothing, and the phone bounced back to the login screen — with the single-use code already spent, so the obvious retry failed too. `canHoldSecureCookie` now decides whether the arriving address can hold it, and the pairing route checks that **before** verifying, so such a request never spends a code, and answers 421 saying where to go instead. A test pins the ordering: moving the check after `verify` fails it.
+
+**#33 and #34 — documentation that was wrong.** The README told the owner to pair a phone as though it merely lacked a button; it has two blockers and both now say so. And the coverage comment claimed `apps/web` had no tests, which stopped being true when `api.test.ts` arrived — so the streaming client, the code that decides whether a turn's last message reaches the screen, was tested but excluded from the thresholds. It is now included; all four global thresholds still clear (branches 84.95 percent against a floor of 80). The integration test's comment claiming a health check created the write-ahead log was wrong too: `openStore` creates it at startup by setting the journal mode and migrating.
+
+Mutation results: ten mutations across the four fixes, all caught — blaming the JSON again, dropping the truncation note, never setting the flag, removing the reachability check, moving it after `verify`, treating a LAN address as trustworthy, and ignoring forwarded HTTPS.
+
+Evidence: `npm run validate` exits 0 with no warnings. 242 unit tests, 10 integration, 84 repository, 2 browser. Branch coverage 84.95 percent. Scans clean over 65 commits.
+
+Left alone on purpose: #31 (the pairing route is exempt from the same-origin check), #28, #27, #24, #15, #14, #12, #6. #31 is the one to read first — it is labelled an enhancement but it is the only state-changing route without that check, and it sits in the authentication that just landed.
+
+## 2026-09-26 (review of #36: the 421 never reached the owner)
+
+One blocker, and it was the right one to catch: **#29's fix stopped at the server.** The 421 and the check-before-verify ordering were both correct, but `pair()` in the browser classified anything unrecognised as `'unavailable'`, whose message is *"Could not reach the server. Is it still running?"* So the owner was told to check whether the server was running — by a server that was running, had answered them, and knew exactly what was wrong. The same confusion #29 was filed about, one layer up: the explanation was written and then discarded. Both this PR's description and the README claimed the server "says so", and neither was true end to end.
+
+Verified before implementing rather than taken on faith: `pair()` really did fall through to `'unavailable'` for 421, and `createApp` really is never told the port, so the message's hardcoded `http://127.0.0.1:4317` was wrong for anyone running `PORT=5000`.
+
+Two deliberate deviations from the suggested fix, both checked with the owner:
+
+**The server's text is read only for the 421 case, not for every failure.** The suggestion was to prefer `detail` whenever present. Applied to every status that would have been a regression: the server answers a deliberately vague "Pairing failed." for a wrong code — vague on purpose, so a caller learns nothing — while the screen says "That code was not accepted. Check it and try again."; and for a lockout the screen says more than the server does about getting a new code. The server knows more than the interface can work out in exactly one case, which is the address. So `detail` is populated only there, which also makes "prefer detail when present" safe. A test pins that 401 and 429 carry no detail.
+
+**`pair()` returns one uniform `PairResult { outcome, detail? }`** rather than the proposed `PairFailure` with `Exclude<PairOutcome, 'paired'>`. Success comes back through the same function, so one shape is simpler than two.
+
+On the port: no port is named at all now, and the message points at the startup line, which prints the exact address. Threading `PORT` into `createApp` solely to compose an error string was the alternative and is not worth an option. A test asserts the message contains no four-digit port, so the hardcoded one cannot come back.
+
+The important evidence is the browser test: a real page against a 421 now renders the server's sentence, contains `127.0.0.1`, and does **not** say "Is it still running?". That is the assertion that would have caught the original defect, and none of the existing unit tests could have.
+
+Mutation results: letting 421 fall through to `'unavailable'` fails three tests, dropping `detail` fails one, and leaking `detail` into the 401 and 429 paths fails one. One of those appeared to survive at first and had not actually been applied — prettier had wrapped the target across three lines, so the single-line pattern never matched. Checking that a mutation applied before believing it survived is already a note in memory; this is the second time it has earned its place.
+
+Also taken from the review's non-blocking notes: a test named "a wrong code from such an address" sent its request over loopback, so the name misread its own intent. Renamed.
+
+Evidence: `npm run validate` exits 0 with no warnings. 247 unit tests, 10 integration, 84 repository, 3 browser. Branch coverage 85.24 percent. Scans clean over 66 commits.
+
+Left alone: #37, filed by the review for two unreachable edge cases in `canHoldSecureCookie` and the `x-forwarded-proto` trust boundary, which matters once a tunnel terminates TLS in front of the server. Neither is reachable while the server binds loopback only.

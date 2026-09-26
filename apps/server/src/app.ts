@@ -5,6 +5,7 @@ import { runClaudeTurn, type ClaudeEvent, type ClaudeTurnOptions } from '@quack/
 import type { AppSessionRecord, Store } from '@quack/storage';
 import {
   buildSessionCookie,
+  canHoldSecureCookie,
   constantTimeEquals,
   createPairingMode,
   CSRF_COOKIE,
@@ -33,19 +34,16 @@ export interface AppOptions {
   /** Injected so tests can drive a fake CLI instead of spending quota. */
   runTurn?: TurnRunner | undefined;
   /**
-   * Where conversations and paired devices are kept.
+   * Where conversations and paired devices are kept. Required.
    *
-   * Required in practice. Sessions live in the store, so without one nothing can
-   * pair and every `/api` route answers 401 — which is safe but not a usable
-   * mode. It stays optional in the type only because a few tests construct an
-   * app that never reaches an authenticated route.
-   *
-   * This comment used to describe running "without persistence" as a supported
-   * choice, and to say `/api/health` would report `persistent: false`. Neither is
-   * true since authentication landed: health answers `{ ok: true }` and nothing
-   * else, because it replies before a caller is known.
+   * It used to be optional, documented as a way to run "without persistence".
+   * That mode never worked once authentication landed: sessions live in the
+   * store, so without one nothing could pair and every `/api` route answered
+   * 401 — a server that served the static page and a liveness probe and nothing
+   * else. Requiring it deletes that dead path along with six optional-chain
+   * call sites and a 503 branch no caller could reach.
    */
-  store?: Store | undefined;
+  store: Store;
   /**
    * The pairing window. Injected so tests can open it without reading a file.
    * One is created with the real clock when this is omitted.
@@ -57,8 +55,41 @@ export interface AppOptions {
   randomBytes?: RandomBytes | undefined;
 }
 
-/** Largest prompt accepted, so a stray request cannot exhaust memory. */
-const MAX_PROMPT_BYTES = 100_000;
+/** Largest request body accepted, so a stray request cannot exhaust memory. */
+export const MAX_BODY_BYTES = 100_000;
+
+/**
+ * Thrown when a body exceeds {@link MAX_BODY_BYTES}.
+ *
+ * A distinct type because the alternative was indistinguishable from a parse
+ * failure: both call sites read the body inside the `try` whose `catch` exists
+ * for `JSON.parse`, so an oversized — but perfectly valid — body came back as
+ * "Body must be JSON." That sends the owner hunting for a syntax error that is
+ * not there and never mentions that a limit exists.
+ */
+export class BodyTooLargeError extends Error {
+  constructor() {
+    super(`Request body exceeds ${String(MAX_BODY_BYTES)} bytes.`);
+    this.name = 'BodyTooLargeError';
+  }
+}
+
+/**
+ * Appended to a stored answer that the client stopped reading part-way through.
+ *
+ * Chosen over a schema column for now: `normalized_messages` would need a
+ * migration and the UI a new state, whereas the transcript already exists to
+ * record what went wrong. If interrupted turns later need rendering differently,
+ * that is the point to add the column.
+ */
+export const TRUNCATED_NOTE = '[The connection was lost before this answer finished.]';
+
+/** The 413 body, with the limit named so the owner can act on it. */
+function sendTooLarge(response: ServerResponse): void {
+  sendJson(response, 413, {
+    error: `That message is too large. The limit is ${String(MAX_BODY_BYTES)} bytes.`,
+  });
+}
 
 const CONTENT_TYPES = new Map<string, string>([
   ['.html', 'text/html; charset=utf-8'],
@@ -86,7 +117,7 @@ async function readBody(request: IncomingMessage): Promise<string> {
   for await (const chunk of request) {
     const buffer = chunk as Buffer;
     size += buffer.length;
-    if (size > MAX_PROMPT_BYTES) throw new Error('Request body is too large.');
+    if (size > MAX_BODY_BYTES) throw new BodyTooLargeError();
     chunks.push(buffer);
   }
   return Buffer.concat(chunks).toString('utf8');
@@ -153,6 +184,8 @@ async function streamTurn(
   // chunk, so the pieces are gathered here and written down once the turn ends.
   const spoken: string[] = [];
   let failure: string | undefined;
+  /** Set when the loop stopped because the client vanished, not because the turn ended. */
+  let truncated = false;
 
   // Writing to a destroyed response emits 'error', and with no listener that
   // surfaces as an unhandled stream error and takes the process down. There is
@@ -169,7 +202,10 @@ async function streamTurn(
 
   try {
     for await (const event of events) {
-      if (clientGone()) break;
+      if (clientGone()) {
+        truncated = true;
+        break;
+      }
       if (event.type === 'session') onSession(event.sessionId, event.model);
       if (event.type === 'text') spoken.push(event.text);
       if (event.type === 'error') failure = event.message;
@@ -194,7 +230,10 @@ async function streamTurn(
           response.once('close', done);
           response.once('error', done);
         });
-        if (clientGone()) break;
+        if (clientGone()) {
+          truncated = true;
+          break;
+        }
       }
     }
   } catch (thrown) {
@@ -205,7 +244,16 @@ async function streamTurn(
 
   // A failed turn is still recorded. The owner asked a question; a transcript
   // that omits what went wrong reads as though it was never asked.
-  const reply = spoken.join('').trim() === '' ? (failure ?? '') : spoken.join('');
+  //
+  // A turn cut short by a hangup is recorded too, but it has to say so. Stored
+  // bare, whatever streamed before the disconnect is indistinguishable from a
+  // complete short answer, so reopening the conversation shows a confident
+  // half-sentence — and the agent's own context and the transcript then disagree
+  // about what was said, because the next turn resumes by provider session id.
+  let reply = spoken.join('').trim() === '' ? (failure ?? '') : spoken.join('');
+  if (truncated) {
+    reply = reply === '' ? TRUNCATED_NOTE : `${reply}\n\n${TRUNCATED_NOTE}`;
+  }
   if (reply !== '') onReply(reply);
 
   response.end();
@@ -237,7 +285,6 @@ export function createApp(options: AppOptions) {
    * secrets, and both expiry rules are applied by the store.
    */
   const authenticate = (request: IncomingMessage): AppSessionRecord | undefined => {
-    if (store === undefined) return undefined;
     const token = parseCookies(request.headers.cookie).get(SESSION_COOKIE);
     if (token === undefined || token === '') return undefined;
 
@@ -264,7 +311,10 @@ export function createApp(options: AppOptions) {
 
       // Set on everything, including refusals and static files: a header that
       // only appears on success protects only the pages that did not need it.
-      const forwardedProto = request.headers['x-forwarded-proto'];
+      // A proxy may send this more than once; take the first, since that is the
+      // hop nearest the client.
+      const rawProto = request.headers['x-forwarded-proto'];
+      const forwardedProto = Array.isArray(rawProto) ? rawProto[0] : rawProto;
       for (const [name, value] of Object.entries(
         securityHeaders({ https: forwardedProto === 'https' }),
       )) {
@@ -283,11 +333,6 @@ export function createApp(options: AppOptions) {
           sendJson(response, 405, { error: 'Use POST.' });
           return;
         }
-        if (store === undefined) {
-          sendJson(response, 503, { error: 'This server cannot pair: no conversation store.' });
-          return;
-        }
-
         let code: string;
         try {
           const parsed: unknown = JSON.parse(await readBody(request));
@@ -300,8 +345,24 @@ export function createApp(options: AppOptions) {
             return;
           }
           code = value;
-        } catch {
-          sendJson(response, 400, { error: 'Body must be JSON.' });
+        } catch (thrown) {
+          if (thrown instanceof BodyTooLargeError) sendTooLarge(response);
+          else sendJson(response, 400, { error: 'Body must be JSON.' });
+          return;
+        }
+
+        // Checked BEFORE verifying, so a code is never spent on a request that
+        // provably cannot succeed. 421 Misdirected Request: the code may be
+        // perfectly good, it just arrived somewhere the session cannot live.
+        if (!canHoldSecureCookie({ host: request.headers.host, forwardedProto })) {
+          // No port in this message. It used to name 4317, which is simply wrong
+          // under `PORT=5000`, and `createApp` is not told the port — threading
+          // it through solely to compose an error string would be a poor trade.
+          // The startup line already prints the exact address, so point there.
+          sendJson(response, 421, {
+            error:
+              'This address cannot keep the session cookie, so pairing here would look like it worked and then fail. Open the dashboard on this machine at a 127.0.0.1 address — the server printed the exact one at startup — or reach it over HTTPS. Your code is unused.',
+          });
           return;
         }
 
@@ -336,13 +397,11 @@ export function createApp(options: AppOptions) {
         return;
       }
 
-      // Everything past here needs a session, and a session can only exist when
-      // there is a store to have created it, which is why `store` is known to be
-      // present below.
+      // Everything past here needs a session.
       const session = authenticate(request);
       const isApi = path.startsWith('/api/');
 
-      if (isApi && (session === undefined || store === undefined)) {
+      if (isApi && session === undefined) {
         sendJson(response, 401, { error: 'Not paired.' });
         return;
       }
@@ -374,7 +433,6 @@ export function createApp(options: AppOptions) {
         sendJson(response, 200, {
           paired: true,
           device: session?.label ?? null,
-          persistent: store !== undefined,
           session: providerSessionId ?? null,
           storedSession: storedSessionId ?? null,
         });
@@ -391,11 +449,8 @@ export function createApp(options: AppOptions) {
       }
 
       if (path === '/api/logout' && request.method === 'POST') {
-        // `store` is present whenever a session is: the guard above returned 401
-        // otherwise. Written with `?.` because that is what the type system can
-        // see, rather than an assertion that could later become untrue quietly.
         if (session !== undefined)
-          store?.revokeAppSession(session.id, new Date(now()).toISOString());
+          store.revokeAppSession(session.id, new Date(now()).toISOString());
         response.setHeader('set-cookie', [
           buildSessionCookie('', 0),
           buildSessionCookie('', 0, { name: CSRF_COOKIE, httpOnly: false }),
@@ -405,7 +460,7 @@ export function createApp(options: AppOptions) {
       }
 
       if (path === '/api/logout-all' && request.method === 'POST') {
-        store?.revokeAllAppSessions(new Date(now()).toISOString());
+        store.revokeAllAppSessions(new Date(now()).toISOString());
         response.setHeader('set-cookie', [
           buildSessionCookie('', 0),
           buildSessionCookie('', 0, { name: CSRF_COOKIE, httpOnly: false }),
@@ -424,7 +479,7 @@ export function createApp(options: AppOptions) {
       }
 
       if (path === '/api/sessions' && request.method === 'GET') {
-        const sessions = (store?.listSessions() ?? []).map((session) => ({
+        const sessions = store.listSessions().map((session) => ({
           id: session.id,
           title: session.title ?? 'Untitled conversation',
           model: session.model ?? null,
@@ -438,7 +493,7 @@ export function createApp(options: AppOptions) {
       const openMatch = /^\/api\/sessions\/([\w-]+)$/u.exec(path);
       if (openMatch !== null && request.method === 'GET') {
         const wanted = openMatch[1] ?? '';
-        const session = store?.getSession(wanted);
+        const session = store.getSession(wanted);
         if (session === undefined) {
           sendJson(response, 404, { error: 'No such conversation.' });
           return;
@@ -447,7 +502,7 @@ export function createApp(options: AppOptions) {
           id: session.id,
           title: session.title ?? 'Untitled conversation',
           model: session.model ?? null,
-          messages: store?.listMessages(session.id) ?? [],
+          messages: store.listMessages(session.id),
         });
         return;
       }
@@ -504,8 +559,9 @@ export function createApp(options: AppOptions) {
             }
             prompt = text;
             if (typeof body['sessionId'] === 'string') wantedSession = body['sessionId'];
-          } catch {
-            sendJson(response, 400, { error: 'Body must be JSON.' });
+          } catch (thrown) {
+            if (thrown instanceof BodyTooLargeError) sendTooLarge(response);
+            else sendJson(response, 400, { error: 'Body must be JSON.' });
             return;
           }
 
@@ -513,7 +569,7 @@ export function createApp(options: AppOptions) {
           // Its provider id comes from the store rather than from memory, which is
           // the whole point of writing it down.
           if (wantedSession !== undefined && wantedSession !== storedSessionId) {
-            const existing = store?.getSession(wantedSession);
+            const existing = store.getSession(wantedSession);
             if (existing === undefined) {
               sendJson(response, 404, { error: 'No such conversation.' });
               return;
@@ -522,15 +578,15 @@ export function createApp(options: AppOptions) {
             providerSessionId = existing.providerSessionId;
           }
 
-          if (store !== undefined && storedSessionId === undefined) {
-            storedSessionId = store.createSession({ workspaceDir: options.workspaceDir }).id;
-          }
+          // A conversation always exists from here on: either one was named and
+          // found, or one is created now. That is what makes the write below
+          // unconditional — it used to be guarded, which only looked necessary
+          // while a store-less app was a possibility.
+          storedSessionId ??= store.createSession({ workspaceDir: options.workspaceDir }).id;
 
           // Written before the turn runs. If the process dies mid-answer the
           // question is still in the transcript, which is the honest record.
-          if (store !== undefined && storedSessionId !== undefined) {
-            store.appendMessage(storedSessionId, { role: 'user', content: prompt });
-          }
+          store.appendMessage(storedSessionId, { role: 'user', content: prompt });
 
           await streamTurn(
             response,
@@ -542,7 +598,7 @@ export function createApp(options: AppOptions) {
             }),
             (id, model) => {
               providerSessionId = id;
-              if (store !== undefined && storedSessionId !== undefined) {
+              if (storedSessionId !== undefined) {
                 store.recordProviderSession(storedSessionId, {
                   providerSessionId: id,
                   model,
@@ -550,7 +606,7 @@ export function createApp(options: AppOptions) {
               }
             },
             (text) => {
-              if (store !== undefined && storedSessionId !== undefined) {
+              if (storedSessionId !== undefined) {
                 store.appendMessage(storedSessionId, { role: 'agent', content: text });
               }
             },

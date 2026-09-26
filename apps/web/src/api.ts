@@ -133,34 +133,70 @@ export function csrfToken(
   return undefined;
 }
 
-export type PairOutcome = 'paired' | 'rejected' | 'locked' | 'unavailable';
+export type PairOutcome = 'paired' | 'rejected' | 'locked' | 'wrongAddress' | 'unavailable';
+
+export interface PairResult {
+  outcome: PairOutcome;
+  /**
+   * The server's own explanation, when it sent one worth showing.
+   *
+   * Only populated for `wrongAddress`, and deliberately so. That is the one case
+   * where the server knows something the interface cannot work out: which
+   * address was used and why it cannot hold the cookie. For a wrong code the
+   * server answers a deliberately vague "Pairing failed." — vague on purpose, so
+   * a caller learns nothing — and for a lockout it says less than the screen
+   * does about how to get a new code. Preferring server text there would make
+   * both messages worse.
+   */
+  detail?: string | undefined;
+}
 
 /**
  * Exchange a pairing code for a session.
  *
- * The three failures are kept apart because the advice differs: a wrong code
- * means try again, a lockout means wait, and an unreachable server means neither.
+ * The failures are kept apart because the advice differs: a wrong code means try
+ * again, a lockout means wait, a bad address means open a different one, and an
+ * unreachable server means none of those. Collapsing the third into the fourth
+ * is what made the server's careful 421 come out as "is it still running?".
  */
-export async function pair(code: string): Promise<PairOutcome> {
+export async function pair(code: string): Promise<PairResult> {
   try {
     const response = await fetch('/api/pair', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ code }),
     });
-    if (response.ok) return 'paired';
-    if (response.status === 429) return 'locked';
-    if (response.status === 401) return 'rejected';
-    return 'unavailable';
+    if (response.ok) return { outcome: 'paired' };
+    if (response.status === 429) return { outcome: 'locked' };
+    if (response.status === 401) return { outcome: 'rejected' };
+    if (response.status === 421) {
+      // 421 Misdirected Request: the code may be fine, it arrived somewhere the
+      // session cannot live. The server's text names the address, so show it —
+      // falling back to the screen's own wording if the body is unreadable.
+      const detail = await response
+        .json()
+        .then((body: unknown) =>
+          typeof body === 'object' &&
+          body !== null &&
+          typeof (body as { error?: unknown }).error === 'string'
+            ? (body as { error: string }).error
+            : undefined,
+        )
+        .catch(() => undefined);
+      return detail === undefined
+        ? { outcome: 'wrongAddress' }
+        : { outcome: 'wrongAddress', detail };
+    }
+    return { outcome: 'unavailable' };
   } catch {
-    return 'unavailable';
+    return { outcome: 'unavailable' };
   }
 }
 
 export interface Me {
   paired: boolean;
+  /** A short label for this device, so paired devices can be told apart. */
   device: string | null;
-  persistent: boolean;
 }
 
 /** Who the server thinks we are, or undefined when this browser is not paired. */

@@ -251,7 +251,12 @@ That is the only time you do this on that browser. The session lasts **90 days**
 
 **If you miss the ten-minute window,** stop the server and start it again for a fresh code.
 
-**To pair a second device,** such as your phone, do it from a browser that is already paired rather than restarting: the code is printed to the server's terminal again when you ask for one. (There is no button for this yet, so today it means restarting with `QUACK_PAIR=1`.)
+**Pairing a phone does not work yet, and it is worth being precise about why** — there are two separate blockers, not one:
+
+1. **The phone cannot reach the server.** It only ever listens on loopback, so there is no address on your network for a phone to open. That is what the authenticated tunnel is for, and it is not built.
+2. **Even if it could reach it, a bare LAN address cannot hold the session.** The session cookie is `Secure`, and browsers only treat loopback and HTTPS as trustworthy — a `http://192.168.x.x` address would accept the response and silently throw the cookie away. Rather than let that happen, the server **refuses to pair** from such an address and says so, leaving your code unused. (Loopback is fine: browsers count it as trustworthy, which was verified rather than assumed.)
+
+So today the dashboard is a desktop browser on the same machine. The endpoint for adding a second device exists and is authenticated, but nothing in the interface calls it, so even locally a second browser means restarting with `QUACK_PAIR=1`.
 
 **If you lose every paired device,** start the server with `QUACK_PAIR=1` to force a new code:
 

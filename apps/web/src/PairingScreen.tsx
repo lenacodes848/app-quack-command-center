@@ -2,10 +2,19 @@ import { useState } from 'react';
 import { PRODUCT_NAME } from '@quack/contracts';
 import { pair, type PairOutcome } from './api.js';
 
-/** What to tell the owner for each way pairing can fail. */
+/**
+ * What to tell the owner for each way pairing can fail.
+ *
+ * `wrongAddress` is normally replaced by the server's own text, which names the
+ * address that was used; this is the fallback for a 421 whose body could not be
+ * read. Every other entry is the interface's own wording and stays that way —
+ * see `PairResult.detail` for why the server's text is not preferred there.
+ */
 const MESSAGES: Record<Exclude<PairOutcome, 'paired'>, string> = {
   rejected: 'That code was not accepted. Check it and try again.',
   locked: 'Too many attempts. Wait a few minutes, then start the server again for a new code.',
+  wrongAddress:
+    'This address cannot keep the session, so pairing here would look like it worked and then fail. Open the dashboard on this machine at a 127.0.0.1 address, or reach it over HTTPS.',
   unavailable: 'Could not reach the server. Is it still running?',
 };
 
@@ -30,12 +39,14 @@ export function PairingScreen({ onPaired }: PairingScreenProps) {
     if (busy || code.trim() === '') return;
     setBusy(true);
     setProblem(undefined);
-    const outcome = await pair(code.trim());
+    const { outcome, detail } = await pair(code.trim());
     if (outcome === 'paired') {
       onPaired();
       return;
     }
-    setProblem(MESSAGES[outcome]);
+    // The server's explanation wins when it sent one, so there is a single
+    // source of truth rather than two copies that drift apart.
+    setProblem(detail ?? MESSAGES[outcome]);
     setBusy(false);
   };
 

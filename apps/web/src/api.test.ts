@@ -208,7 +208,7 @@ describe('pairing from the browser', () => {
   test('sends the code the owner typed', async () => {
     const fake = captureFetch({ body: { ok: true } });
     try {
-      expect(await pair('7H2K-9QMR-4B')).toBe('paired');
+      expect((await pair('7H2K-9QMR-4B')).outcome).toBe('paired');
       expect(fake.calls[0]?.url).toBe('/api/pair');
       const body = JSON.parse((fake.calls[0]?.init?.body ?? '{}') as string) as {
         code: string;
@@ -222,7 +222,7 @@ describe('pairing from the browser', () => {
   test('reports a refused code without pretending it worked', async () => {
     const fake = captureFetch({ status: 401, body: { error: 'Pairing failed.' } });
     try {
-      expect(await pair('wrong')).toBe('rejected');
+      expect((await pair('wrong')).outcome).toBe('rejected');
     } finally {
       fake.restore();
     }
@@ -233,16 +233,91 @@ describe('pairing from the browser', () => {
     // owner to retry when retrying cannot work is worse than saying nothing.
     const fake = captureFetch({ status: 429, body: { error: 'Too many attempts.' } });
     try {
-      expect(await pair('wrong')).toBe('locked');
+      expect((await pair('wrong')).outcome).toBe('locked');
     } finally {
       fake.restore();
     }
   });
 });
 
+describe('pairing from an address that cannot keep the cookie', () => {
+  test('is its own outcome, not "could not reach the server"', async () => {
+    // 421 used to fall through to 'unavailable', whose message tells the owner
+    // to check whether the server is running — when the server is running,
+    // answered them, and knows exactly what is wrong. That is the same
+    // confusion #29 was filed about, one layer up.
+    const fake = captureFetch({
+      status: 421,
+      body: { error: 'This address cannot keep the session cookie.' },
+    });
+    try {
+      const result = await pair('7H2K-9QMR-4B');
+      expect(result.outcome).toBe('wrongAddress');
+      expect(result.outcome).not.toBe('unavailable');
+    } finally {
+      fake.restore();
+    }
+  });
+
+  test('carries the server explanation, rather than a second hardcoded copy', async () => {
+    const fake = captureFetch({
+      status: 421,
+      body: { error: 'Open the dashboard on this machine at a 127.0.0.1 address.' },
+    });
+    try {
+      expect((await pair('x')).detail).toBe(
+        'Open the dashboard on this machine at a 127.0.0.1 address.',
+      );
+    } finally {
+      fake.restore();
+    }
+  });
+
+  test('still names the outcome when the body cannot be read', async () => {
+    // A 421 with no usable body must not become 'unavailable' again; the screen
+    // has its own wording to fall back on.
+    const fake = captureFetch({ status: 421, body: 'not json' });
+    try {
+      const result = await pair('x');
+      expect(result.outcome).toBe('wrongAddress');
+      expect(result.detail).toBeUndefined();
+    } finally {
+      fake.restore();
+    }
+  });
+
+  test('leaves the other failures with the interface own wording', async () => {
+    // The server is deliberately vague on a wrong code, so that text must not
+    // replace the screen message, which says what to do about it.
+    for (const [status, outcome] of [
+      [401, 'rejected'],
+      [429, 'locked'],
+    ] as const) {
+      const fake = captureFetch({ status, body: { error: 'Pairing failed.' } });
+      try {
+        const result = await pair('x');
+        expect(result.outcome).toBe(outcome);
+        expect(result.detail).toBeUndefined();
+      } finally {
+        fake.restore();
+      }
+    }
+  });
+
+  test('a server that truly cannot be reached is still unavailable', async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = () => Promise.reject(new Error('connection refused'));
+    try {
+      expect((await pair('x')).outcome).toBe('unavailable');
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
+
 describe('whoAmI', () => {
   test('reports a paired browser', async () => {
-    const fake = captureFetch({ body: { paired: true, device: 'Mac', persistent: true } });
+    const fake = captureFetch({ body: { paired: true, device: 'Mac' } });
     try {
       const me = await whoAmI();
       expect(fake.calls[0]?.url).toBe('/api/me');

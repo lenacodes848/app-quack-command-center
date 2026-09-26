@@ -40,11 +40,14 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
       reportsDirectory: 'coverage',
-      // apps/web is .tsx and has no test infrastructure yet (no jsdom, no React
-      // testing library). TASK_015 builds the real shell and brings its own
-      // tests; adding them here would be scope creep. Named explicitly rather
-      // than left to a .ts glob that excludes .tsx by accident.
-      include: ['packages/*/src/**/*.ts', 'apps/server/src/**/*.ts'],
+      // apps/web's .ts modules are tested and measured: `api.ts` is the streaming
+      // client, and whether a turn's last message reaches the screen is decided
+      // there, so it belongs under the thresholds. Its .tsx components are not
+      // measured — no jsdom and no React testing library yet, so `App.tsx` and
+      // `PairingScreen.tsx` are deliberately absent rather than dragging the
+      // floor down. Named explicitly rather than left to a .ts glob that excludes
+      // .tsx by accident.
+      include: ['packages/*/src/**/*.ts', 'apps/server/src/**/*.ts', 'apps/web/src/**/*.ts'],
       exclude: ['**/*.test.ts', '**/dist/**', 'apps/server/src/testkit.ts'],
       thresholds: {
         lines: 80,

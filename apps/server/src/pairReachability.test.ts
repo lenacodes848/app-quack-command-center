@@ -127,6 +127,9 @@ describe('pairing from an address that cannot hold the cookie', () => {
     const body = JSON.parse(response.body) as { error: string };
     expect(body.error).toMatch(/127\.0\.0\.1|loopback/i);
     expect(body.error).toMatch(/https/i);
+    // No port: the message cannot know it (createApp is not told), and naming
+    // 4317 was simply wrong for anyone running PORT=5000.
+    expect(body.error).not.toMatch(/:\d{4}/u);
     expect(response.raw).not.toContain('quack_session');
   });
 
@@ -152,7 +155,7 @@ describe('pairing from an address that cannot hold the cookie', () => {
     expect(second.status).toBe(200);
   });
 
-  test('a wrong code from such an address is still refused as a wrong code', async () => {
+  test('a wrong code over loopback is still refused as a wrong code', async () => {
     // The reachability check must not become a way to probe codes for free: it
     // happens before verification, so nothing is learned about the code either
     // way, and a caller on loopback still gets the ordinary failure.

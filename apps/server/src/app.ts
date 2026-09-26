@@ -355,9 +355,13 @@ export function createApp(options: AppOptions) {
         // provably cannot succeed. 421 Misdirected Request: the code may be
         // perfectly good, it just arrived somewhere the session cannot live.
         if (!canHoldSecureCookie({ host: request.headers.host, forwardedProto })) {
+          // No port in this message. It used to name 4317, which is simply wrong
+          // under `PORT=5000`, and `createApp` is not told the port — threading
+          // it through solely to compose an error string would be a poor trade.
+          // The startup line already prints the exact address, so point there.
           sendJson(response, 421, {
             error:
-              'Open the dashboard at http://127.0.0.1:4317 or over HTTPS. This address cannot keep the session cookie, so pairing here would appear to work and then fail. Your code is unused.',
+              'This address cannot keep the session cookie, so pairing here would look like it worked and then fail. Open the dashboard on this machine at a 127.0.0.1 address — the server printed the exact one at startup — or reach it over HTTPS. Your code is unused.',
           });
           return;
         }

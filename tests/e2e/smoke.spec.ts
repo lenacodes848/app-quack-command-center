@@ -58,6 +58,36 @@ test('an unpaired browser is shown the pairing screen, not the dashboard', async
   expect(unexpected, 'the pairing screen must load cleanly').toEqual([]);
 });
 
+test('a 421 shows the server explanation, not "is the server running?"', async ({ page }) => {
+  // The blocker from the review of #36, end to end in a real browser. The server
+  // answers 421 with a specific explanation; the screen used to classify that as
+  // 'unavailable' and render "Could not reach the server. Is it still running?"
+  // — advice pointing the wrong way, about a server that had just answered.
+  const problems = watchConsole(page);
+  await page.route('**/api/me', (route) =>
+    route.fulfill({ status: 401, json: { error: 'Not paired.' } }),
+  );
+  await page.route('**/api/pair', (route) =>
+    route.fulfill({
+      status: 421,
+      json: { error: 'This address cannot keep the session cookie. Open a 127.0.0.1 address.' },
+    }),
+  );
+
+  await page.goto('/');
+  await page.getByLabel('Pairing code').fill('7H2K-9QMR-4B');
+  await page.getByRole('button', { name: 'Pair this device' }).click();
+
+  const alert = page.getByRole('alert');
+  await expect(alert).toContainText('cannot keep the session cookie');
+  await expect(alert).toContainText('127.0.0.1');
+  await expect(alert).not.toContainText('Is it still running?');
+
+  // Still on the pairing screen, and the field is still usable.
+  await expect(page.getByRole('button', { name: 'Pair this device' })).toBeEnabled();
+  expect(problems.filter((p) => !p.includes('401') && !p.includes('421'))).toEqual([]);
+});
+
 test('the built web app renders the command center shell with a clean console', async ({
   page,
 }) => {

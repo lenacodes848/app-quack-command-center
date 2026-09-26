@@ -305,3 +305,27 @@ Mutation results: ten mutations across the four fixes, all caught — blaming th
 Evidence: `npm run validate` exits 0 with no warnings. 242 unit tests, 10 integration, 84 repository, 2 browser. Branch coverage 84.95 percent. Scans clean over 65 commits.
 
 Left alone on purpose: #31 (the pairing route is exempt from the same-origin check), #28, #27, #24, #15, #14, #12, #6. #31 is the one to read first — it is labelled an enhancement but it is the only state-changing route without that check, and it sits in the authentication that just landed.
+
+## 2026-09-26 (review of #36: the 421 never reached the owner)
+
+One blocker, and it was the right one to catch: **#29's fix stopped at the server.** The 421 and the check-before-verify ordering were both correct, but `pair()` in the browser classified anything unrecognised as `'unavailable'`, whose message is *"Could not reach the server. Is it still running?"* So the owner was told to check whether the server was running — by a server that was running, had answered them, and knew exactly what was wrong. The same confusion #29 was filed about, one layer up: the explanation was written and then discarded. Both this PR's description and the README claimed the server "says so", and neither was true end to end.
+
+Verified before implementing rather than taken on faith: `pair()` really did fall through to `'unavailable'` for 421, and `createApp` really is never told the port, so the message's hardcoded `http://127.0.0.1:4317` was wrong for anyone running `PORT=5000`.
+
+Two deliberate deviations from the suggested fix, both checked with the owner:
+
+**The server's text is read only for the 421 case, not for every failure.** The suggestion was to prefer `detail` whenever present. Applied to every status that would have been a regression: the server answers a deliberately vague "Pairing failed." for a wrong code — vague on purpose, so a caller learns nothing — while the screen says "That code was not accepted. Check it and try again."; and for a lockout the screen says more than the server does about getting a new code. The server knows more than the interface can work out in exactly one case, which is the address. So `detail` is populated only there, which also makes "prefer detail when present" safe. A test pins that 401 and 429 carry no detail.
+
+**`pair()` returns one uniform `PairResult { outcome, detail? }`** rather than the proposed `PairFailure` with `Exclude<PairOutcome, 'paired'>`. Success comes back through the same function, so one shape is simpler than two.
+
+On the port: no port is named at all now, and the message points at the startup line, which prints the exact address. Threading `PORT` into `createApp` solely to compose an error string was the alternative and is not worth an option. A test asserts the message contains no four-digit port, so the hardcoded one cannot come back.
+
+The important evidence is the browser test: a real page against a 421 now renders the server's sentence, contains `127.0.0.1`, and does **not** say "Is it still running?". That is the assertion that would have caught the original defect, and none of the existing unit tests could have.
+
+Mutation results: letting 421 fall through to `'unavailable'` fails three tests, dropping `detail` fails one, and leaking `detail` into the 401 and 429 paths fails one. One of those appeared to survive at first and had not actually been applied — prettier had wrapped the target across three lines, so the single-line pattern never matched. Checking that a mutation applied before believing it survived is already a note in memory; this is the second time it has earned its place.
+
+Also taken from the review's non-blocking notes: a test named "a wrong code from such an address" sent its request over loopback, so the name misread its own intent. Renamed.
+
+Evidence: `npm run validate` exits 0 with no warnings. 247 unit tests, 10 integration, 84 repository, 3 browser. Branch coverage 85.24 percent. Scans clean over 66 commits.
+
+Left alone: #37, filed by the review for two unreachable edge cases in `canHoldSecureCookie` and the `x-forwarded-proto` trust boundary, which matters once a tunnel terminates TLS in front of the server. Neither is reachable while the server binds loopback only.

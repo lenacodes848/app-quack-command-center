@@ -8,6 +8,12 @@
       "path": "packages/config"
     },
     {
+      "path": "packages/adapter"
+    },
+    {
+      "path": "packages/storage"
+    },
+    {
       "path": "apps/server"
     }
   ]

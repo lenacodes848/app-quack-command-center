@@ -9,5 +9,16 @@ export default defineConfig(({ mode }) => {
     envPrefix: PUBLIC_ENV_PREFIX,
     plugins: [react(), tailwindcss()],
     build: { outDir: 'dist', sourcemap: false },
+    server: {
+      // In development the UI is served by Vite and the API by the Node
+      // server, so /api is proxied to it. In production the Node server
+      // serves the built app itself and no proxy is involved.
+      proxy: {
+        '/api': {
+          target: 'http://127.0.0.1:4317',
+          changeOrigin: false,
+        },
+      },
+    },
   };
 });

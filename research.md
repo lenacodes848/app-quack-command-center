@@ -61,7 +61,7 @@ Lint and format on variant A: ESLint 10.11.0, `@eslint/js` 10.0.1, typescript-es
 
   1.62.0's tsconfig loader cannot follow this repository's project references, which exist because the monorepo is built with `tsc -b`. 1.63.0 loads the same file and the smoke test passes in 3.3s. The toy project in variant A never hit this because it had no project references. Deviating deliberately, with the evidence, rather than pinning back to a version that cannot run.
 
-**Native module and npm 11 install scripts.** npm 11.19 reports better-sqlite3's `node-gyp rebuild` install script as "not yet covered by allowScripts" and does not run it. The module still loads because the package ships prebuilt binaries for darwin arm64 and x64, linux x64 and arm64 (glibc and musl) and win32, and no compile is needed. Keep the script unapproved: it is unnecessary and install scripts run arbitrary code. Task 003 must confirm the Linux CI runner loads the module the same way.
+**Native module and npm 11 install scripts.** npm 11.19 reports better-sqlite3's `node-gyp rebuild` install script as "not yet covered by allowScripts" and does not run it. The module still loads because the package ships prebuilt binaries for darwin arm64 and x64, linux x64 and arm64 (glibc and musl) and win32, and no compile is needed. Keep the script unapproved: it is unnecessary and install scripts run arbitrary code. **Confirmed on Linux CI 2026-09-25** (runs 36203418984, both the `validate` and `e2e` jobs): `npm ci` on ubuntu-latest reported the same "install scripts not yet covered by allowScripts" warning for better-sqlite3 13.0.1 and never ran `node-gyp rebuild`, and every storage test passed, so the runner loads the prebuilt binary exactly as macOS does. No compiler is needed in CI.
 
 ## Architecture decisions
 
@@ -80,17 +80,108 @@ Lint and format on variant A: ESLint 10.11.0, `@eslint/js` 10.0.1, typescript-es
 
 - Server binds to loopback. Remote access, when built, is Cloudflare Access at the edge plus an application session at the origin.
 - Working directories are restricted to configured roots, resolved through symlinks. Roots are changed locally only, and no API route edits them.
-- Device pairing design: not yet written. It is written here and approved by the owner before TASK_013 starts. The planned shape is a single use, short lived pairing code written to a file with owner-only permissions at startup, exchanged for an HTTP only, secure, same site, expiring and revocable cookie backed by an `app_sessions` table.
+- Device pairing design: **approved by the owner 2026-09-25.** The full design is the section "Device pairing design (TASK_013)" below.
 - Secret scanning: CI installs a pinned gitleaks (version and SHA-256 in `.github/workflows/secrets.yml`, checksum taken from the official release and matched against a separate download, and the version must equal the one recorded above) and runs `npm run scan:secrets` (full working tree) and `npm run scan:secrets:history` (full history) with the same scripts a developer runs. The history script fails when gitleaks reports zero commits scanned. The workflow token is read only (`contents: read`). The `gitleaks/gitleaks-action` action is not used, see Failed approaches.
 - Source protection: `scripts/source-protection-scan.mjs` fails on absolute macOS or Linux home directory paths that include a user name (with or without a trailing slash), on email addresses other than the reserved example domains, GitHub's noreply forms and the SSH remote form (user `git` at a host), and on any entry in the local, gitignored `.source-protection-denylist`. Tilde paths such as `~/Downloads/1-git` are deliberately allowed because they name no user, so the worksheet can name the projects directory. It prints file, line and rule, never the matched text.
 - Source protection also scans **commit metadata** — author and committer name and email — not only file content. Added 2026-09-25 after the repository was made public with a personal name and address sitting in the author field of 30 of 36 commits while every check was green.
   - **Scope is `HEAD`, not `--all`.** `--all` walks every ref in a checkout, so a stale local branch or a leftover `refs/remotes/pr/*` fails the scan with a finding unrelated to the code under review — and since the scanner prints no matched text by design, that finding is near-undiagnosable. Findings name the ref alongside the commit. Override with `SOURCE_PROTECTION_REF`.
   - **Policy consequence of being public (recorded 2026-09-25).** The identity rule applies to whatever history is scanned, so an outside contributor whose commits carry an ordinary personal address will fail `scan:source` on their own pull request. That is intended for a single-owner project, and it is written down here rather than left to be discovered: this repository is public to get required status checks, not to invite contributions. If that ever changes, the rule has to be scoped to the owner's own commits instead of dropped.
 
+## Device pairing design (TASK_013)
+
+**Status: APPROVED by the owner on 2026-09-25**, with one revision to the draft: session lifetimes are 90 days absolute and 14 days idle, up from 30 and 7. Implementation began the same day. The PRD (5.2) and the phase plan require this approval before any authentication code exists, so this line is the record of it.
+
+### What problem this solves, and what it does not
+
+Today anything that can reach the port can drive the agent. That is the gap. The PRD's threat model (5.1) assumes an attacker who can find the hostname, send arbitrary requests, attempt CSRF from another site, replay a stolen cookie and hammer the login. This design addresses those.
+
+It deliberately does **not** defend against: a compromised machine, another process running as the same user (which can read any `0600` file this design writes), or a hostile browser extension. It is also **not** a replacement for Cloudflare Access at the edge — the PRD requires both layers for remote access, and this is only the origin layer. Loopback binding stays.
+
+### The pairing exchange
+
+1. A pairing code exists only while **pairing mode** is open, so there is never a permanently guessable code sitting there. Pairing mode opens for **10 minutes** in three cases: at startup when no unexpired session exists (first run, or after logout-all); on an authenticated `POST /api/pairing-code`, which is how a second device such as the phone is added from an already-paired one; and at startup with `QUACK_PAIR=1`, the recovery path for having lost every paired device.
+2. On opening, the server generates a code from `crypto.randomBytes`: 10 characters of Crockford base32, about 50 bits, shown grouped as `XXXX-XXXX-XX` so it can be read off a screen and typed on a phone. Only its SHA-256 hash is held in memory.
+3. The code is **printed to the terminal** and **written to `$DATA_DIR/pairing-code`** with mode `0600`. Printing happens only when stdout is a TTY, so running as a background service with logs to a file writes the file and never the log. The file is deleted when the code is used or expires.
+4. The browser posts the code to `POST /api/pair`. The server compares with `timingSafeEqual` after a length check, and the code is **single use**: consumed on success.
+5. On success the server creates a **new** session row and issues a fresh token, so a login always rotates. The token is 32 random bytes as base64url, 256 bits. **The database stores only its SHA-256 hash**, so reading the database yields nothing that can be replayed as a cookie.
+6. **Five consecutive failures invalidate the current code entirely** and a fresh one is issued. That defeats online guessing outright rather than merely slowing it, which matters more than a delay for a 50-bit secret. Failures are also rate limited to 5 per 15 minutes.
+
+### The session cookie
+
+`quack_session=<token>; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=<remaining>`
+
+`Secure` is set unconditionally. **Verified empirically on 2026-09-25** rather than assumed: a browser was served `Secure; SameSite=Strict` cookies over plain `http://127.0.0.1` and returned all of them, because a loopback address counts as a trustworthy origin. So the PRD's `Secure` requirement is met without breaking local HTTP access, and the same cookie works unchanged behind an HTTPS tunnel.
+
+### `app_sessions`, migration 2
+
+The PRD data model (3.6) has no table for application sessions, so this adds one.
+
+```
+id           TEXT PRIMARY KEY      -- uuid
+token_hash   TEXT NOT NULL UNIQUE  -- sha256 hex; never the token itself
+label        TEXT                  -- short, sanitised client hint, for the device list
+created_at   TEXT NOT NULL
+last_used_at TEXT NOT NULL
+expires_at   TEXT NOT NULL
+revoked_at   TEXT
+```
+
+Lookup is by `token_hash`, so verification is an indexed equality on a hash rather than a scan and comparison of secrets. **Absolute expiry 90 days, idle timeout 14 days** on `last_used_at`, which is refreshed at most once a minute so a busy session does not cause a write per request.
+
+### CSRF, in three layers
+
+`SameSite=Strict` is the primary control. On every state-changing request the server also requires a **same-origin check** (`Origin`, falling back to `Sec-Fetch-Site`), rejecting anything cross-site. On top of that a **double-submit token**: a readable `quack_csrf` cookie issued alongside the session, which the browser must echo in an `x-csrf-token` header, compared with `timingSafeEqual`. The token alone would be enough for most cases; all three are cheap and the PRD asks for the header explicitly.
+
+### Route policy
+
+- Public: `GET /api/health`, reduced to `{"ok":true}` with no session or persistence detail, so liveness checking leaks no state; `POST /api/pair`; and the static front-end, which must load unauthenticated in order to show the login screen at all.
+- Authenticated: every other `/api` route, including all of the turn and conversation endpoints.
+- `POST /api/logout` revokes the current session. `POST /api/logout-all` revokes every row, which also closes any session on a device the owner no longer has. Revocation is immediate because it is checked per request.
+
+### Other PRD requirements
+
+Security headers are set explicitly: a CSP with no inline script (`default-src 'self'`, `script-src 'self'`, `style-src 'self'`, `img-src 'self' data:`, `connect-src 'self'`, `frame-ancestors 'none'`, `base-uri 'none'`, `form-action 'none'`), plus `X-Content-Type-Options`, `Referrer-Policy: no-referrer` and a minimal `Permissions-Policy`. HSTS is set only when a forwarded header says the request arrived over HTTPS, since sending it on loopback HTTP is meaningless. **Risk to check during implementation:** the Vite build may emit an inline module preload, which a strict `script-src 'self'` would block. If it does, the honest fix is a hashed allowance for that one script, not `unsafe-inline`, and it gets reported either way.
+
+There are no usernames, so account enumeration is moot; a failed pairing returns one generic error with the same shape whatever the reason. `createApp` gains injected clock and random so expiry, rotation and rate limiting are testable without waiting or flaking — the phase plan says `buildApp(deps)` with Fastify `inject()`, but this server is raw `node:http`, so the same idea is applied with the existing injection style. Cookies are parsed by a small hand-rolled reader rather than a new dependency, consistent with the rest of this server.
+
+### Deferred, and named so it is not mistaken for done
+
+Zod request and response schemas on every route, Pino with redaction of authorization, cookies and message content, request IDs, per-action rate limits beyond pairing, and the `audit_events` table. These are all part of TASK_013 as specified and none of them is authentication; the owner scoped this increment to the auth core on 2026-09-25.
+
+### How each PRD 5.2 requirement is met
+
+| Requirement | How |
+|---|---|
+| High entropy secret | 256-bit session token, 50-bit single-use pairing code |
+| Secure, HTTP only, same site cookie | All three set; `Secure` verified to work on loopback |
+| Expire | 90-day absolute, 14-day idle |
+| Logout and logout from all devices | `POST /api/logout`, `POST /api/logout-all` |
+| Rotate on login | A new row and a new token on every pairing |
+| Constant time verification | `timingSafeEqual` for code and CSRF token; sessions looked up by hash |
+| Rate limit login attempts | 5 per 15 minutes, and 5 failures destroy the code |
+| Avoid account enumeration | No usernames; one generic failure response |
+
+### Consequences worth knowing before approving
+
+Every existing server test and the browser smoke test will need to pair first, so this change touches a lot of test setup. The running dashboard will stop working until paired, and the first start after the upgrade prints a code. There is no bypass flag for local use, deliberately: a development bypass is exactly the thing that survives into production.
+
 ## Known provider limitations and unknowns
 
 - Claude Code flags, structured stream formats, permission prompt handling, config-directory isolation, attachment support and transcript layout have not been verified yet. Task 010 step 0 records them here from the official documentation and `claude --help` on the installed version before any adapter code is written.
 - Whether headless Claude Code can bridge permission prompts is the highest risk item. If it cannot, the adapter reports questions as unsupported and the tmux compatibility mode is the fallback.
+
+## Verified provider behaviour (CLI 2.1.282, live, 2026-09-25)
+
+Measured by running the real binary, not read from documentation. The reliable instrument is the CLI's own `system/init` event under `--output-format stream-json --verbose`, which lists the tools and MCP servers a turn actually holds. Do not ask the model what tools it has: asked the same question twice it gave contradictory answers, once denying connectors it demonstrably held.
+
+- **`--print` denies anything that would prompt.** `--permission-prompts` defaults to `none` there, so with no permission mode the agent announces a tool and then reports the action refused. A headless turn therefore cannot write a file unless told otherwise. `--permission-mode acceptEdits` allows edits in the working directory; the accepted modes are `acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk` and `plan`.
+- **`CLAUDE_CONFIG_DIR` isolates the credentials along with everything else.** Pointed at an empty scratch directory the turn answers `Not logged in, please run /login`. It is therefore not usable as a config-isolation mechanism while the product depends on the owner's subscription. This answers the "config-directory isolation" unknown above.
+- **`--restricted` does not remove the signed-in account's connectors.** It removes the tools that run commands or code, and the MCP servers that come from configuration files: with it, chrome-devtools and playwright (both `"source":"user"`) disappear and `Bash` is absent. Every connector with `"source":"claudeai"` survives. A restricted turn still held 114 tools including the owner's Gmail, Google Drive, Google Calendar and Blotato. Those arrive with the account, not with a config file, which is why no config isolation reaches them.
+- **`--tools` governs only the built-in set.** An allowlist of six built-in tools still left 93 `mcp__*` tools in place. It is not a way to exclude connectors.
+- **`--disallowedTools mcp__*` is what removes them.** The same turn went from 114 tools to 21, with `Read` and `Write` intact and `Bash` absent. This is the flag the adapter relies on.
+- **A plain `spawn` leaks the parent's session.** A dashboard started from inside a Claude Code session passed the child `CLAUDECODE`, `AI_AGENT` and six `CLAUDE_CODE_` variables including the session id and the messaging token. A child holding those is a participant in a conversation it knows nothing about, and it also changes how connectors load, which confounded an earlier measurement. The adapter strips them.
+- **The posture the adapter sends** is therefore `--print <prompt> --output-format stream-json --verbose --permission-mode acceptEdits --restricted --disallowedTools mcp__*`, with restricted the default rather than an opt-in, plus `--resume <id>` on later turns. Sessions resume correctly: a second turn answered from the first turn's context in a workspace holding nothing else.
+- **Still unverified:** attachments, transcript layout on disk, and bridging a real permission prompt to a browser (`--permission-prompts host` with `--input-format stream-json`), which remains the route to per-tool approval if that is wanted later.
 
 ## PRD defects noted
 
@@ -118,6 +209,11 @@ Each of these cost time in this project. Apply them from the start.
 - Commit before mutation-testing. A stray `git checkout <file>` after a mutation silently discarded an uncommitted fix. Restore from a backup copy, or commit first.
 - Run lint, type-check, format check and the tests before every commit, chained. One commit went in with lint failing.
 - Inside a quoted heredoc, write a single backslash for a newline escape in Python. A doubled backslash writes a literal backslash and n into the file. A repository test now fails if a memory file contains one.
+- `nvm use` with no argument fails in a directory that has no `.nvmrc`. Chained with `&&` it silently skips everything after it, which for a while looked like the CLI producing no output at all. Use `nvm use 24.21.0` when the working directory is outside the repository.
+- The source-protection scan rejects a literal home-directory path anywhere in the tree, test fixtures included. A fake `HOME` in a test must be assembled from parts, the same rule the email fixtures already follow.
+- **ESLint does not read `.gitignore`.** `playwright-report/` and `test-results/` are git-ignored, so one failing browser test used to leave behind bundled trace JavaScript that `npm run lint` then tried to type-check, dying with "you have used a rule which requires type information". It stayed broken on every later run until the directory was deleted by hand. Both are now in the ESLint ignores. Any new generated directory needs adding in both places.
+- **Timestamps tie, so never assert ordering with a real clock.** Two writes in the same millisecond make an ordering assertion pass whatever the code does, and mutation testing caught two such tests here. `openStore` takes an injectable `now`; the ordering test runs it backwards, which is the only way to prove the code sorts on the sequence and not on the time.
+- **better-sqlite3 enables foreign keys by default.** Removing our explicit `PRAGMA foreign_keys = ON` breaks no test. The pragma stays because the setting is per-connection rather than stored in the file, but it is belt and braces, not the thing that makes enforcement work.
 - A green CI tick is evidence only for the commit it ran on. Compare the run's `headSha` with the pull request head, and read what the scanner actually scanned.
 - Read the whole issue, reproduce it, and test the suggested fix before adopting it. The suggested fix for issue 10 would not have worked.
 - CI runs two workflows. `secrets-and-source-protection` runs the repository tests and the three scans; `validate` runs `npm ci`, format check, lint, type-check, unit tests with coverage, the builds, the integration project and the browser smoke test, in a `validate` job and an `e2e` job. Coverage and Playwright artifacts are retained and upload even when the run fails. Landed 2026-09-25.
@@ -129,7 +225,7 @@ Each of these cost time in this project. Apply them from the start.
 - **Branch protection: decided 2026-09-25.** Classic branch protection refused with HTTP 403 on the old private plan. The owner's answer was to make the repository **public**, specifically so that required status checks become available. No longer an open question.
   - Use the **repository rulesets** endpoint, not classic protection: `repos/{owner}/{repo}/rulesets` answers `200` on this repository while `branches/main/protection` still answers `403`.
   - The ruleset is deliberately **not created yet**. A ruleset that requires a check a branch's workflows do not produce blocks that branch from merging at all, so it must wait until the open pull requests have landed. Until then, TASK_003 criterion 6 and test requirement 1 are **unmet**, and their PRD boxes stay unticked.
-- **CI hardening, deferred to TASK_003:** pin the first-party actions (`actions/checkout`, `actions/setup-node`) to commit SHAs, run `npm ci`, type-check, lint, Vitest and the builds in CI, and confirm the Linux runner loads better-sqlite3 from its prebuilt binary. Full-tree and full-history secret scanning is done (issue 3).
+- **CI hardening, deferred to TASK_003:** pin the first-party actions (`actions/checkout`, `actions/setup-node`) to commit SHAs. The rest of this item is done: `npm ci`, type-check, lint, Vitest and the builds all run in CI, full-tree and full-history secret scanning works (issue 3), and the Linux runner was confirmed on 2026-09-25 to load better-sqlite3 from its prebuilt binary.
 - **Scanner rule gaps:** the email and home-directory gaps are fixed (issues 4 and 5). One remains: `package-lock.json` is excluded from the scanner by exact path at the repository root only (issue 6). Fix it with a test first, and never loosen a rule to make a build pass.
 - **Tests built from fragments:** the scanner tests assemble their fixtures from string fragments so the test source does not match its own rules. Keep that pattern.
 
@@ -148,6 +244,9 @@ Recheck before each adapter. All are listed in PRD section 16.
 - Cloudflare Access self hosted app: https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/
 
 ## Failed approaches
+
+- 2026-09-25: Isolating the dashboard's Claude configuration with `CLAUDE_CONFIG_DIR`. It works, completely, including the authentication, so the turn came back `Not logged in`. The credentials live with the configuration, so there is no version of this that keeps the product working while starting from an empty config directory.
+- 2026-09-25: Believing `--restricted` had removed the owner's connectors. A direct run of it reported none, and the finding was wrong twice over. The run happened inside a Claude Code session, so the child inherited `CLAUDECODE` and the rest, and a nested child does not load connectors the same way; and the evidence was the model's own account of its tools, which contradicted itself between two runs of the same prompt. The `system/init` event showed 114 tools including Gmail and Drive. Two lessons: scrub the environment before measuring anything about a child CLI, and never use the model's self-report as an instrument when the protocol states the fact directly.
 
 - 2026-09-24: Stacked pull requests. This file once claimed that a child pull request follows its parent to `main` on its own. It does not: GitHub retargets only when the base branch is deleted. After #1 merged without its branch being deleted, #2 still pointed at the old parent and had to be retargeted by hand, and merging it as it stood would have looked merged while never reaching `main`. The correct procedure is in Environment notes. Prefer independent branches off `main`, and reserve stacking for work that genuinely depends on an unmerged parent.
 

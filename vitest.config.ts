@@ -6,6 +6,8 @@ const src = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 const alias = {
   '@quack/contracts': src('./packages/contracts/src/index.ts'),
   '@quack/config': src('./packages/config/src/index.ts'),
+  '@quack/adapter': src('./packages/adapter/src/index.ts'),
+  '@quack/storage': src('./packages/storage/src/index.ts'),
 };
 
 export default defineConfig({
@@ -43,7 +45,7 @@ export default defineConfig({
       // tests; adding them here would be scope creep. Named explicitly rather
       // than left to a .ts glob that excludes .tsx by accident.
       include: ['packages/*/src/**/*.ts', 'apps/server/src/**/*.ts'],
-      exclude: ['**/*.test.ts', '**/dist/**'],
+      exclude: ['**/*.test.ts', '**/dist/**', 'apps/server/src/testkit.ts'],
       thresholds: {
         lines: 80,
         functions: 80,

@@ -5,6 +5,7 @@ import { runClaudeTurn, type ClaudeEvent, type ClaudeTurnOptions } from '@quack/
 import type { AppSessionRecord, Store } from '@quack/storage';
 import {
   buildSessionCookie,
+  canHoldSecureCookie,
   constantTimeEquals,
   createPairingMode,
   CSRF_COOKIE,
@@ -310,7 +311,10 @@ export function createApp(options: AppOptions) {
 
       // Set on everything, including refusals and static files: a header that
       // only appears on success protects only the pages that did not need it.
-      const forwardedProto = request.headers['x-forwarded-proto'];
+      // A proxy may send this more than once; take the first, since that is the
+      // hop nearest the client.
+      const rawProto = request.headers['x-forwarded-proto'];
+      const forwardedProto = Array.isArray(rawProto) ? rawProto[0] : rawProto;
       for (const [name, value] of Object.entries(
         securityHeaders({ https: forwardedProto === 'https' }),
       )) {
@@ -344,6 +348,17 @@ export function createApp(options: AppOptions) {
         } catch (thrown) {
           if (thrown instanceof BodyTooLargeError) sendTooLarge(response);
           else sendJson(response, 400, { error: 'Body must be JSON.' });
+          return;
+        }
+
+        // Checked BEFORE verifying, so a code is never spent on a request that
+        // provably cannot succeed. 421 Misdirected Request: the code may be
+        // perfectly good, it just arrived somewhere the session cannot live.
+        if (!canHoldSecureCookie({ host: request.headers.host, forwardedProto })) {
+          sendJson(response, 421, {
+            error:
+              'Open the dashboard at http://127.0.0.1:4317 or over HTTPS. This address cannot keep the session cookie, so pairing here would appear to work and then fail. Your code is unused.',
+          });
           return;
         }
 

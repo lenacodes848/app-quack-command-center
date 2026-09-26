@@ -33,19 +33,16 @@ export interface AppOptions {
   /** Injected so tests can drive a fake CLI instead of spending quota. */
   runTurn?: TurnRunner | undefined;
   /**
-   * Where conversations and paired devices are kept.
+   * Where conversations and paired devices are kept. Required.
    *
-   * Required in practice. Sessions live in the store, so without one nothing can
-   * pair and every `/api` route answers 401 — which is safe but not a usable
-   * mode. It stays optional in the type only because a few tests construct an
-   * app that never reaches an authenticated route.
-   *
-   * This comment used to describe running "without persistence" as a supported
-   * choice, and to say `/api/health` would report `persistent: false`. Neither is
-   * true since authentication landed: health answers `{ ok: true }` and nothing
-   * else, because it replies before a caller is known.
+   * It used to be optional, documented as a way to run "without persistence".
+   * That mode never worked once authentication landed: sessions live in the
+   * store, so without one nothing could pair and every `/api` route answered
+   * 401 — a server that served the static page and a liveness probe and nothing
+   * else. Requiring it deletes that dead path along with six optional-chain
+   * call sites and a 503 branch no caller could reach.
    */
-  store?: Store | undefined;
+  store: Store;
   /**
    * The pairing window. Injected so tests can open it without reading a file.
    * One is created with the real clock when this is omitted.
@@ -287,7 +284,6 @@ export function createApp(options: AppOptions) {
    * secrets, and both expiry rules are applied by the store.
    */
   const authenticate = (request: IncomingMessage): AppSessionRecord | undefined => {
-    if (store === undefined) return undefined;
     const token = parseCookies(request.headers.cookie).get(SESSION_COOKIE);
     if (token === undefined || token === '') return undefined;
 
@@ -333,11 +329,6 @@ export function createApp(options: AppOptions) {
           sendJson(response, 405, { error: 'Use POST.' });
           return;
         }
-        if (store === undefined) {
-          sendJson(response, 503, { error: 'This server cannot pair: no conversation store.' });
-          return;
-        }
-
         let code: string;
         try {
           const parsed: unknown = JSON.parse(await readBody(request));
@@ -387,13 +378,11 @@ export function createApp(options: AppOptions) {
         return;
       }
 
-      // Everything past here needs a session, and a session can only exist when
-      // there is a store to have created it, which is why `store` is known to be
-      // present below.
+      // Everything past here needs a session.
       const session = authenticate(request);
       const isApi = path.startsWith('/api/');
 
-      if (isApi && (session === undefined || store === undefined)) {
+      if (isApi && session === undefined) {
         sendJson(response, 401, { error: 'Not paired.' });
         return;
       }
@@ -425,7 +414,6 @@ export function createApp(options: AppOptions) {
         sendJson(response, 200, {
           paired: true,
           device: session?.label ?? null,
-          persistent: store !== undefined,
           session: providerSessionId ?? null,
           storedSession: storedSessionId ?? null,
         });
@@ -442,11 +430,8 @@ export function createApp(options: AppOptions) {
       }
 
       if (path === '/api/logout' && request.method === 'POST') {
-        // `store` is present whenever a session is: the guard above returned 401
-        // otherwise. Written with `?.` because that is what the type system can
-        // see, rather than an assertion that could later become untrue quietly.
         if (session !== undefined)
-          store?.revokeAppSession(session.id, new Date(now()).toISOString());
+          store.revokeAppSession(session.id, new Date(now()).toISOString());
         response.setHeader('set-cookie', [
           buildSessionCookie('', 0),
           buildSessionCookie('', 0, { name: CSRF_COOKIE, httpOnly: false }),
@@ -456,7 +441,7 @@ export function createApp(options: AppOptions) {
       }
 
       if (path === '/api/logout-all' && request.method === 'POST') {
-        store?.revokeAllAppSessions(new Date(now()).toISOString());
+        store.revokeAllAppSessions(new Date(now()).toISOString());
         response.setHeader('set-cookie', [
           buildSessionCookie('', 0),
           buildSessionCookie('', 0, { name: CSRF_COOKIE, httpOnly: false }),
@@ -475,7 +460,7 @@ export function createApp(options: AppOptions) {
       }
 
       if (path === '/api/sessions' && request.method === 'GET') {
-        const sessions = (store?.listSessions() ?? []).map((session) => ({
+        const sessions = store.listSessions().map((session) => ({
           id: session.id,
           title: session.title ?? 'Untitled conversation',
           model: session.model ?? null,
@@ -489,7 +474,7 @@ export function createApp(options: AppOptions) {
       const openMatch = /^\/api\/sessions\/([\w-]+)$/u.exec(path);
       if (openMatch !== null && request.method === 'GET') {
         const wanted = openMatch[1] ?? '';
-        const session = store?.getSession(wanted);
+        const session = store.getSession(wanted);
         if (session === undefined) {
           sendJson(response, 404, { error: 'No such conversation.' });
           return;
@@ -498,7 +483,7 @@ export function createApp(options: AppOptions) {
           id: session.id,
           title: session.title ?? 'Untitled conversation',
           model: session.model ?? null,
-          messages: store?.listMessages(session.id) ?? [],
+          messages: store.listMessages(session.id),
         });
         return;
       }
@@ -565,7 +550,7 @@ export function createApp(options: AppOptions) {
           // Its provider id comes from the store rather than from memory, which is
           // the whole point of writing it down.
           if (wantedSession !== undefined && wantedSession !== storedSessionId) {
-            const existing = store?.getSession(wantedSession);
+            const existing = store.getSession(wantedSession);
             if (existing === undefined) {
               sendJson(response, 404, { error: 'No such conversation.' });
               return;
@@ -574,15 +559,15 @@ export function createApp(options: AppOptions) {
             providerSessionId = existing.providerSessionId;
           }
 
-          if (store !== undefined && storedSessionId === undefined) {
-            storedSessionId = store.createSession({ workspaceDir: options.workspaceDir }).id;
-          }
+          // A conversation always exists from here on: either one was named and
+          // found, or one is created now. That is what makes the write below
+          // unconditional — it used to be guarded, which only looked necessary
+          // while a store-less app was a possibility.
+          storedSessionId ??= store.createSession({ workspaceDir: options.workspaceDir }).id;
 
           // Written before the turn runs. If the process dies mid-answer the
           // question is still in the transcript, which is the honest record.
-          if (store !== undefined && storedSessionId !== undefined) {
-            store.appendMessage(storedSessionId, { role: 'user', content: prompt });
-          }
+          store.appendMessage(storedSessionId, { role: 'user', content: prompt });
 
           await streamTurn(
             response,
@@ -594,7 +579,7 @@ export function createApp(options: AppOptions) {
             }),
             (id, model) => {
               providerSessionId = id;
-              if (store !== undefined && storedSessionId !== undefined) {
+              if (storedSessionId !== undefined) {
                 store.recordProviderSession(storedSessionId, {
                   providerSessionId: id,
                   model,
@@ -602,7 +587,7 @@ export function createApp(options: AppOptions) {
               }
             },
             (text) => {
-              if (store !== undefined && storedSessionId !== undefined) {
+              if (storedSessionId !== undefined) {
                 store.appendMessage(storedSessionId, { role: 'agent', content: text });
               }
             },

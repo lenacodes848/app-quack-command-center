@@ -242,7 +242,7 @@ describe('pairing from the browser', () => {
 
 describe('whoAmI', () => {
   test('reports a paired browser', async () => {
-    const fake = captureFetch({ body: { paired: true, device: 'Mac', persistent: true } });
+    const fake = captureFetch({ body: { paired: true, device: 'Mac' } });
     try {
       const me = await whoAmI();
       expect(fake.calls[0]?.url).toBe('/api/me');

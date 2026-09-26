@@ -159,8 +159,8 @@ export async function pair(code: string): Promise<PairOutcome> {
 
 export interface Me {
   paired: boolean;
+  /** A short label for this device, so paired devices can be told apart. */
   device: string | null;
-  persistent: boolean;
 }
 
 /** Who the server thinks we are, or undefined when this browser is not paired. */

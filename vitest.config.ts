@@ -7,6 +7,7 @@ const alias = {
   '@quack/contracts': src('./packages/contracts/src/index.ts'),
   '@quack/config': src('./packages/config/src/index.ts'),
   '@quack/adapter': src('./packages/adapter/src/index.ts'),
+  '@quack/storage': src('./packages/storage/src/index.ts'),
 };
 
 export default defineConfig({

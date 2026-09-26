@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { PRODUCT_NAME } from '@quack/contracts';
-import { sendTurn } from './api.js';
+import { listSessions, openSession, sendTurn, type SavedSession } from './api.js';
 
 interface Message {
   id: number;
@@ -17,11 +17,50 @@ export function App() {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [session, setSession] = useState<string | undefined>(undefined);
+  /** The stored conversation on screen, which survives a restart. */
+  const [storedId, setStoredId] = useState<string | undefined>(undefined);
+  const [saved, setSaved] = useState<SavedSession[]>([]);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const refreshSaved = useCallback(async () => {
+    setSaved(await listSessions());
+  }, []);
+
+  // The list is loaded once on arrival, so a reload lands on the history rather
+  // than on an empty page that implies nothing was ever said.
+  useEffect(() => {
+    void refreshSaved();
+  }, [refreshSaved]);
+
+  /** Replay a saved conversation into the transcript. */
+  const open = useCallback(
+    async (id: string) => {
+      if (busy) return;
+      const opened = await openSession(id);
+      if (opened === undefined) {
+        // It was in the list and is not there now. Reload the list rather than
+        // leaving a row that does nothing when clicked.
+        void refreshSaved();
+        return;
+      }
+      setStoredId(opened.id);
+      setSession(undefined);
+      setMessages(
+        opened.messages.map((message) => ({
+          id: nextId++,
+          role: message.role === 'user' ? 'you' : 'agent',
+          text: message.content,
+          tools: [],
+          failed: false,
+        })),
+      );
+    },
+    [busy, refreshSaved],
+  );
 
   const send = useCallback(async () => {
     const text = draft.trim();
@@ -42,7 +81,7 @@ export function App() {
     };
 
     try {
-      for await (const event of sendTurn(text)) {
+      for await (const event of sendTurn(text, { sessionId: storedId })) {
         switch (event.type) {
           case 'session':
             setSession(event.sessionId);
@@ -69,14 +108,20 @@ export function App() {
       }
     } finally {
       setBusy(false);
+      // The turn may have created the conversation or renamed nothing at all;
+      // either way the sidebar is refreshed so the new thread appears and the
+      // order reflects what was just said.
+      void refreshSaved();
     }
-  }, [draft, busy]);
+  }, [draft, busy, storedId, refreshSaved]);
 
   const reset = useCallback(async () => {
     await fetch('/api/session', { method: 'DELETE' });
     setSession(undefined);
+    setStoredId(undefined);
     setMessages([]);
-  }, []);
+    void refreshSaved();
+  }, [refreshSaved]);
 
   return (
     <div className="flex h-dvh flex-col bg-neutral-950 text-neutral-100">
@@ -102,54 +147,91 @@ export function App() {
         </span>
       </header>
 
-      <main className="flex-1 overflow-y-auto px-4 py-6">
-        <div className="mx-auto flex max-w-3xl flex-col gap-5">
-          {messages.length === 0 && (
-            <p className="mt-16 text-center text-sm text-neutral-500">
-              Ask Claude Code something. It runs in the workspace directory the server printed at
-              startup.
-            </p>
-          )}
-
-          {messages.map((message) => (
-            <article key={message.id} className="flex flex-col gap-1">
-              <span
-                className={`text-xs font-medium ${
-                  message.role === 'you' ? 'text-neutral-500' : 'text-[#F5B301]'
-                }`}
-              >
-                {message.role}
-              </span>
-
-              {message.tools.length > 0 && (
-                <ul className="flex flex-wrap gap-1.5 py-0.5">
-                  {message.tools.map((tool, index) => (
-                    <li
-                      key={`${tool}-${String(index)}`}
-                      className="rounded bg-neutral-800 px-1.5 py-0.5 text-[11px] text-neutral-400"
+      <div className="flex min-h-0 flex-1">
+        <nav
+          aria-label="Saved conversations"
+          className="hidden w-64 shrink-0 flex-col overflow-y-auto border-r border-neutral-800 md:flex"
+        >
+          {saved.length === 0 ? (
+            <p className="px-3 py-4 text-xs text-neutral-600">No saved conversations yet.</p>
+          ) : (
+            <ul className="flex flex-col py-2">
+              {saved.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    onClick={() => void open(item.id)}
+                    disabled={busy}
+                    aria-current={item.id === storedId ? 'true' : undefined}
+                    className={`w-full px-3 py-2 text-left text-xs leading-snug disabled:opacity-40 ${
+                      item.id === storedId
+                        ? 'bg-neutral-800 text-neutral-100'
+                        : 'text-neutral-400 enabled:hover:bg-neutral-900'
+                    }`}
+                  >
+                    <span className="line-clamp-2">{item.title}</span>
+                    <time
+                      dateTime={item.updatedAt}
+                      className="mt-0.5 block text-[10px] text-neutral-600"
                     >
-                      {tool}
-                    </li>
-                  ))}
-                </ul>
-              )}
+                      {new Date(item.updatedAt).toLocaleString()}
+                    </time>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </nav>
 
-              <p
-                className={`whitespace-pre-wrap text-sm leading-relaxed ${
-                  message.failed ? 'text-red-400' : 'text-neutral-100'
-                }`}
-              >
-                {message.text === '' && busy ? (
-                  <span className="text-neutral-500">thinking…</span>
-                ) : (
-                  message.text
-                )}
+        <main className="flex-1 overflow-y-auto px-4 py-6">
+          <div className="mx-auto flex max-w-3xl flex-col gap-5">
+            {messages.length === 0 && (
+              <p className="mt-16 text-center text-sm text-neutral-500">
+                Ask Claude Code something. It runs in the workspace directory the server printed at
+                startup.
               </p>
-            </article>
-          ))}
-          <div ref={endRef} />
-        </div>
-      </main>
+            )}
+
+            {messages.map((message) => (
+              <article key={message.id} className="flex flex-col gap-1">
+                <span
+                  className={`text-xs font-medium ${
+                    message.role === 'you' ? 'text-neutral-500' : 'text-[#F5B301]'
+                  }`}
+                >
+                  {message.role}
+                </span>
+
+                {message.tools.length > 0 && (
+                  <ul className="flex flex-wrap gap-1.5 py-0.5">
+                    {message.tools.map((tool, index) => (
+                      <li
+                        key={`${tool}-${String(index)}`}
+                        className="rounded bg-neutral-800 px-1.5 py-0.5 text-[11px] text-neutral-400"
+                      >
+                        {tool}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <p
+                  className={`whitespace-pre-wrap text-sm leading-relaxed ${
+                    message.failed ? 'text-red-400' : 'text-neutral-100'
+                  }`}
+                >
+                  {message.text === '' && busy ? (
+                    <span className="text-neutral-500">thinking…</span>
+                  ) : (
+                    message.text
+                  )}
+                </p>
+              </article>
+            ))}
+            <div ref={endRef} />
+          </div>
+        </main>
+      </div>
 
       <form
         className="border-t border-neutral-800 px-4 py-3"

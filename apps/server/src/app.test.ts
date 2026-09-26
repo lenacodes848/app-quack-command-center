@@ -57,7 +57,14 @@ async function readNdjson(response: Response): Promise<unknown[]> {
 describe('health', () => {
   test('reports no session before anything has run', async () => {
     const base = await serve(createApp({ workspaceDir: scratch() }));
-    expect(await (await fetch(`${base}/api/health`)).json()).toEqual({ ok: true, session: null });
+    expect(await (await fetch(`${base}/api/health`)).json()).toEqual({
+      ok: true,
+      session: null,
+      storedSession: null,
+      // Built with no store, so it says plainly that nothing is being saved
+      // rather than letting the browser imply the history is safe.
+      persistent: false,
+    });
   });
 });
 

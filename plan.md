@@ -18,7 +18,7 @@ The owner stopped the infrastructure work mid-flight: *"stop fixing linting erro
 - `apps/server` streams a turn to the browser as newline-delimited JSON over a plain `POST /api/turn`. A turn is request-shaped, so a streaming response fits it without a WebSocket dependency. One in-memory session, one turn at a time. Sessions run in `$DATA_DIR/workspace`, never a path a request chooses.
 - `apps/web` is the chat UI: message list, composer, tool chips, streaming text, error states.
 
-**Deliberately absent:** persistence (a restart loses the thread), authentication, multiple sessions, attachments, permission prompts. The PRD's 34-task graph below is background, not the plan of record. Do not restart the ceremony unless the owner asks.
+**Deliberately absent:** authentication, attachments, per-tool permission prompts, and deleting saved conversations. Persistence landed on 2026-09-25 and is no longer absent. The PRD's 34-task graph below is background, not the plan of record. Do not restart the ceremony unless the owner asks.
 
 **Done 2026-09-25: the slice has been run against the real CLI** with the owner's approval, in a scratch directory. It works, and it found two defects that no test against a fake could have found — the agent could not write a file, and it inherited the owner's own connectors. Both are fixed; see the last entry of `progress.md` and "Verified provider behaviour" in `research.md`. Persistence is now the next increment, because "sessions survive a restart" is the PRD's headline promise and the slice does not have it.
 
@@ -28,7 +28,14 @@ State on 2026-09-25, end of the live-run session. The product is the MVP vertica
 
 **The slice is live-verified.** The owner approved the first live provider gate and the real CLI has now been driven end to end: streaming, `--resume` continuity, workspace isolation, tool events and the browser UI. That gate is closed. Two defects it found are fixed, and the verified provider behaviour behind them is in `research.md` under "Verified provider behaviour" — read it before touching adapter flags, because three plausible-looking approaches there are wrong.
 
-**The next increment is persistence.** Nothing survives a restart, and "sessions survive a restart" is the PRD's headline promise. Take it in the TASK_005 shape; better-sqlite3 13.0.1 is already verified.
+**Done 2026-09-25: persistence.** Conversations survive a restart, proved by killing the server with `kill -9` and watching a new process replay the transcript and resume the provider conversation. `packages/storage` holds `agent_sessions` and `normalized_messages` (PRD 3.6 names), at `$DATA_DIR/quack.db`, WAL on, `0700`/`0600`, schema version in `user_version`. The web app has a sidebar of saved conversations.
+
+**The next increment is an owner decision.** The strongest candidates, roughly in order of how much they add per unit of work:
+
+1. **Authentication.** The dashboard is currently open to anything that can reach the port. This is the hard blocker before the Phase 6 public hostname, and TASK_013 needs a written device-pairing design approved before any code.
+2. **Per-tool permission prompts in the browser**, so the agent can run commands with the owner's approval instead of being unable to run them at all. Needs `--permission-prompts host` with `--input-format stream-json`.
+3. **Renaming and deleting saved conversations.** Deleting is a destructive action and an owner gate; the schema already cascades.
+4. **Search across conversations**, which is what the PRD's FTS5 verification was for.
 
 **Deliberately not done, and worth an owner decision when it comes up:** per-tool permission prompts in the browser. The dashboard currently allows file edits and forbids commands outright. Bridging a real prompt needs `--permission-prompts host` with `--input-format stream-json`, which is a substantially larger change than the slice and was declined for the MVP.
 

@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadServerEnv, type ServerEnv } from '@quack/config';
 import { PRODUCT_NAME } from '@quack/contracts';
+import { openStore } from '@quack/storage';
 import { createApp } from './app.js';
 
 export function describeStartup(env: ServerEnv): string {
@@ -21,6 +22,16 @@ export function workspaceDir(env: ServerEnv): string {
   return join(env.DATA_DIR, 'workspace');
 }
 
+/**
+ * Where conversations are stored.
+ *
+ * Beside the workspace under `DATA_DIR`, so the one directory the owner points
+ * at holds everything the dashboard owns and nothing it does not.
+ */
+export function databasePath(env: ServerEnv): string {
+  return join(env.DATA_DIR, 'quack.db');
+}
+
 function builtWebDir(): string | undefined {
   // dist/index.js -> apps/server/dist, so the web build is two levels up.
   const here = dirname(fileURLToPath(import.meta.url));
@@ -32,9 +43,22 @@ export function start(env: ServerEnv): ReturnType<typeof createServer> {
   const workspace = workspaceDir(env);
   mkdirSync(workspace, { recursive: true });
 
+  const store = openStore(databasePath(env));
+
   const server = createServer(
-    createApp({ workspaceDir: workspace, webDir: builtWebDir(), runTurn: undefined }),
+    createApp({
+      workspaceDir: workspace,
+      webDir: builtWebDir(),
+      runTurn: undefined,
+      store,
+    }),
   );
+
+  // Closing the store on the way out checkpoints the write-ahead log, so a
+  // clean stop leaves one tidy database file rather than a -wal alongside it.
+  server.once('close', () => {
+    store.close();
+  });
 
   // Without this, a port clash surfaces as an unhandled 'error' event and a
   // raw Node stack trace, which says nothing useful to someone who simply has
@@ -54,6 +78,7 @@ export function start(env: ServerEnv): ReturnType<typeof createServer> {
   server.listen(env.PORT, env.HOST, () => {
     console.log(`${PRODUCT_NAME} on http://${env.HOST}:${String(env.PORT)}`);
     console.log(`Agent workspace: ${workspace}`);
+    console.log(`Conversations: ${databasePath(env)}`);
   });
 
   return server;

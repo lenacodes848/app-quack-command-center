@@ -64,13 +64,75 @@ async function* decode(body: ReadableStream<Uint8Array>): AsyncGenerator<string>
   }
 }
 
+/** A saved conversation, as the sidebar shows it. */
+export interface SavedSession {
+  id: string;
+  title: string;
+  model: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A stored message, as the transcript replays it. */
+export interface SavedMessage {
+  role: 'user' | 'agent';
+  content: string;
+  seq: number;
+}
+
+export interface OpenedSession {
+  id: string;
+  title: string;
+  messages: SavedMessage[];
+}
+
+/**
+ * The saved conversations, newest first.
+ *
+ * A failure reads as an empty list rather than throwing: the sidebar is a
+ * convenience, and it must not be able to take the conversation on screen down
+ * with it.
+ */
+export async function listSessions(): Promise<SavedSession[]> {
+  try {
+    const response = await fetch('/api/sessions');
+    if (!response.ok) return [];
+    const parsed = (await response.json()) as { sessions?: SavedSession[] };
+    return parsed.sessions ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** One saved conversation with its messages, or undefined if it is gone. */
+export async function openSession(id: string): Promise<OpenedSession | undefined> {
+  try {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(id)}`);
+    if (!response.ok) return undefined;
+    return (await response.json()) as OpenedSession;
+  } catch {
+    return undefined;
+  }
+}
+
+export interface SendTurnOptions {
+  /** The stored conversation to continue. Omit to start a new one. */
+  sessionId?: string | undefined;
+  signal?: AbortSignal | undefined;
+}
+
 /** Send a message and stream the turn's events as they arrive. */
-export async function* sendTurn(text: string, signal?: AbortSignal): AsyncGenerator<TurnEvent> {
+export async function* sendTurn(
+  text: string,
+  options: SendTurnOptions = {},
+): AsyncGenerator<TurnEvent> {
   const response = await fetch('/api/turn', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ text }),
-    signal: signal ?? null,
+    body: JSON.stringify(
+      options.sessionId === undefined ? { text } : { text, sessionId: options.sessionId },
+    ),
+    signal: options.signal ?? null,
   });
 
   if (!response.ok || response.body === null) {

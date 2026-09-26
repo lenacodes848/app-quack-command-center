@@ -20,6 +20,13 @@ export default tseslint.config(
       'node_modules/**',
       '**/*.mjs',
       'tests/integration/fixtures/**',
+      // Playwright's own output. These are git-ignored, but ESLint does not read
+      // .gitignore, so without them a single failing browser test leaves behind
+      // bundled trace JavaScript that lint then tries to type-check and dies on
+      // — turning one test failure into a lint failure that persists across runs
+      // until the directory is deleted by hand.
+      'playwright-report/**',
+      'test-results/**',
     ],
   },
   js.configs.recommended,

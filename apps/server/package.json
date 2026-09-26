@@ -6,6 +6,7 @@
   "dependencies": {
     "@quack/adapter": "0.0.0",
     "@quack/config": "0.0.0",
-    "@quack/contracts": "0.0.0"
+    "@quack/contracts": "0.0.0",
+    "@quack/storage": "0.0.0"
   }
 }

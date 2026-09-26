@@ -2,6 +2,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { runClaudeTurn, type ClaudeEvent, type ClaudeTurnOptions } from '@quack/adapter';
+import type { Store } from '@quack/storage';
 
 export type TurnRunner = (options: ClaudeTurnOptions) => AsyncGenerator<ClaudeEvent>;
 
@@ -12,6 +13,13 @@ export interface AppOptions {
   webDir?: string | undefined;
   /** Injected so tests can drive a fake CLI instead of spending quota. */
   runTurn?: TurnRunner | undefined;
+  /**
+   * Where conversations are kept. Omit to run without persistence, which a
+   * throwaway run or a test that does not care may want; a restart then loses
+   * the thread, and `/api/health` reports `persistent: false` so the browser
+   * can say so rather than implying the history is safe.
+   */
+  store?: Store | undefined;
 }
 
 /** Largest prompt accepted, so a stray request cannot exhaust memory. */
@@ -97,7 +105,8 @@ function serveStatic(webDir: string, urlPath: string, response: ServerResponse):
 async function streamTurn(
   response: ServerResponse,
   events: AsyncGenerator<ClaudeEvent>,
-  onSession: (sessionId: string) => void,
+  onSession: (sessionId: string, model: string | undefined) => void,
+  onReply: (text: string) => void,
 ): Promise<void> {
   response.writeHead(200, {
     'content-type': 'application/x-ndjson; charset=utf-8',
@@ -105,29 +114,48 @@ async function streamTurn(
     'x-accel-buffering': 'no',
   });
 
+  // The transcript keeps one message per turn rather than one per streamed
+  // chunk, so the pieces are gathered here and written down once the turn ends.
+  const spoken: string[] = [];
+  let failure: string | undefined;
+
   try {
     for await (const event of events) {
-      if (event.type === 'session') onSession(event.sessionId);
+      if (event.type === 'session') onSession(event.sessionId, event.model);
+      if (event.type === 'text') spoken.push(event.text);
+      if (event.type === 'error') failure = event.message;
       if (!response.write(`${JSON.stringify(event)}\n`)) {
         await new Promise((r) => response.once('drain', r));
       }
     }
-  } catch (failure) {
-    const message = failure instanceof Error ? failure.message : 'The turn failed.';
+  } catch (thrown) {
+    const message = thrown instanceof Error ? thrown.message : 'The turn failed.';
+    failure = message;
     response.write(`${JSON.stringify({ type: 'error', message })}\n`);
   }
+
+  // A failed turn is still recorded. The owner asked a question; a transcript
+  // that omits what went wrong reads as though it was never asked.
+  const reply = spoken.join('').trim() === '' ? (failure ?? '') : spoken.join('');
+  if (reply !== '') onReply(reply);
+
   response.end();
 }
 
 /**
- * One in-memory conversation, no persistence.
+ * The dashboard's HTTP surface.
  *
- * Deliberate for the first working version: restarting the server loses the
- * thread. Durable sessions are the job of the storage task.
+ * Holds which conversation is currently open, and writes every turn to the
+ * store as it happens so a restart resumes rather than forgets. With no store
+ * it keeps the old in-memory behaviour, where a restart loses the thread.
  */
 export function createApp(options: AppOptions) {
   const runTurn = options.runTurn ?? runClaudeTurn;
-  let sessionId: string | undefined;
+  const store = options.store;
+  /** The provider's conversation id for the open conversation. */
+  let providerSessionId: string | undefined;
+  /** Our own id for the open conversation, when there is a store. */
+  let storedSessionId: string | undefined;
   let busy = false;
 
   return function handle(request: IncomingMessage, response: ServerResponse): void {
@@ -136,13 +164,50 @@ export function createApp(options: AppOptions) {
       const path = url.pathname;
 
       if (path === '/api/health') {
-        sendJson(response, 200, { ok: true, session: sessionId ?? null });
+        sendJson(response, 200, {
+          ok: true,
+          session: providerSessionId ?? null,
+          storedSession: storedSessionId ?? null,
+          persistent: store !== undefined,
+        });
         return;
       }
 
       if (path === '/api/session' && request.method === 'DELETE') {
-        sessionId = undefined;
+        // Starts a new conversation. It does not delete the stored one: removing
+        // saved conversations is a destructive act the owner has to ask for.
+        providerSessionId = undefined;
+        storedSessionId = undefined;
         sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (path === '/api/sessions' && request.method === 'GET') {
+        const sessions = (store?.listSessions() ?? []).map((session) => ({
+          id: session.id,
+          title: session.title ?? 'Untitled conversation',
+          model: session.model ?? null,
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+        }));
+        sendJson(response, 200, { sessions });
+        return;
+      }
+
+      const openMatch = /^\/api\/sessions\/([\w-]+)$/u.exec(path);
+      if (openMatch !== null && request.method === 'GET') {
+        const wanted = openMatch[1] ?? '';
+        const session = store?.getSession(wanted);
+        if (session === undefined) {
+          sendJson(response, 404, { error: 'No such conversation.' });
+          return;
+        }
+        sendJson(response, 200, {
+          id: session.id,
+          title: session.title ?? 'Untitled conversation',
+          model: session.model ?? null,
+          messages: store?.listMessages(session.id) ?? [],
+        });
         return;
       }
 
@@ -159,29 +224,66 @@ export function createApp(options: AppOptions) {
         }
 
         let prompt: string;
+        let wantedSession: string | undefined;
         try {
           const parsed: unknown = JSON.parse(await readBody(request));
-          const text =
+          const body =
             typeof parsed === 'object' && parsed !== null
-              ? (parsed as Record<string, unknown>)['text']
-              : undefined;
+              ? (parsed as Record<string, unknown>)
+              : {};
+          const text = body['text'];
           if (typeof text !== 'string' || text.trim() === '') {
             sendJson(response, 400, { error: 'Send { "text": "..." } with a non-empty message.' });
             return;
           }
           prompt = text;
+          if (typeof body['sessionId'] === 'string') wantedSession = body['sessionId'];
         } catch {
           sendJson(response, 400, { error: 'Body must be JSON.' });
           return;
+        }
+
+        // Continuing a stored conversation, perhaps one from before a restart.
+        // Its provider id comes from the store rather than from memory, which is
+        // the whole point of writing it down.
+        if (wantedSession !== undefined && wantedSession !== storedSessionId) {
+          const existing = store?.getSession(wantedSession);
+          if (existing === undefined) {
+            sendJson(response, 404, { error: 'No such conversation.' });
+            return;
+          }
+          storedSessionId = existing.id;
+          providerSessionId = existing.providerSessionId;
+        }
+
+        if (store !== undefined && storedSessionId === undefined) {
+          storedSessionId = store.createSession({ workspaceDir: options.workspaceDir }).id;
+        }
+
+        // Written before the turn runs. If the process dies mid-answer the
+        // question is still in the transcript, which is the honest record.
+        if (store !== undefined && storedSessionId !== undefined) {
+          store.appendMessage(storedSessionId, { role: 'user', content: prompt });
         }
 
         busy = true;
         try {
           await streamTurn(
             response,
-            runTurn({ prompt, cwd: options.workspaceDir, sessionId }),
-            (id) => {
-              sessionId = id;
+            runTurn({ prompt, cwd: options.workspaceDir, sessionId: providerSessionId }),
+            (id, model) => {
+              providerSessionId = id;
+              if (store !== undefined && storedSessionId !== undefined) {
+                store.recordProviderSession(storedSessionId, {
+                  providerSessionId: id,
+                  model,
+                });
+              }
+            },
+            (text) => {
+              if (store !== undefined && storedSessionId !== undefined) {
+                store.appendMessage(storedSessionId, { role: 'agent', content: text });
+              }
             },
           );
         } finally {

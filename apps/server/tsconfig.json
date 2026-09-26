@@ -1,11 +1,23 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "rootDir": "src", "outDir": "dist" },
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"],
   "references": [
-    { "path": "../../packages/adapter" },
-    { "path": "../../packages/config" },
-    { "path": "../../packages/contracts" }
+    {
+      "path": "../../packages/storage"
+    },
+    {
+      "path": "../../packages/adapter"
+    },
+    {
+      "path": "../../packages/config"
+    },
+    {
+      "path": "../../packages/contracts"
+    }
   ]
 }

@@ -261,8 +261,11 @@ export function canHoldSecureCookie(request: {
   if (bare === 'localhost') return true;
   // The whole 127/8 block is loopback, not only 127.0.0.1.
   if (/^127(?:\.\d{1,3}){3}$/u.test(bare)) return true;
-  // IPv6 loopback, including the uncompressed spelling of ::1.
-  if (/^(?:0*:)*0*1$/u.test(bare)) return true;
+  // IPv6 loopback, including the uncompressed spelling of ::1. At least one
+  // colon group is required: with `*` the pattern collapsed to `0*1` and matched
+  // a host with no colons at all, so `1`, `01` and `0001` were read as loopback.
+  // A browser reads `http://1/` as 0.0.0.1, which is not.
+  if (/^(?:0*:)+0*1$/u.test(bare)) return true;
   // IPv4-mapped loopback, e.g. ::ffff:127.0.0.1.
   return /^(?:0*:)*(?:ffff:)?127(?:\.\d{1,3}){3}$/u.test(bare);
 }

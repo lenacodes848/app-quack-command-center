@@ -24,16 +24,66 @@ The owner stopped the infrastructure work mid-flight: *"stop fixing linting erro
 
 ## Product scope — decided 2026-09-26, do not re-litigate
 
-**This is a dashboard for managing local coding agents, as the PRD describes it.** Browser-tab control and operating macOS are **explicitly out of scope for now.** Issue #27 raised the ambiguity: a goal recorded there described agents driving Chrome tabs and completing operations on a Mac from a phone, and nothing in the PRD, the task graph or any memory file mentioned it. The owner settled it in favour of the PRD.
+**This is a dashboard for managing local coding agents.** Issue #27 raised the ambiguity: a goal recorded there described agents driving Chrome tabs and completing operations on a Mac from a phone, and nothing in the PRD, the task graph or any memory file mentioned it. The owner settled it. But the two halves of that goal have **different** standing against the PRD, and an earlier version of this section wrongly attributed both to it:
 
-What follows from that, so the reasoning is not lost:
+- **Browser-tab control is out of scope, and the PRD never contemplated it.** Zero mentions of Chrome. Deferring it is faithful to the spec.
+- **Operating the owner's Mac IS in the PRD, and is deferred rather than dropped.** The PRD specifies it in its own vocabulary: the agent runs in the owner's real directories (line 127, line 331, line 1081 "Restrict working directories to configured roots", TASK_006, TASK_016 criterion 2); it runs shell commands, with line 207 listing only *automatic approval* of destructive shell actions as the non-goal, not the actions themselves; and approvals are answered from the phone (line 133, line 351, line 505, TASK_018). Choosing not to build that yet is a decision that goes **beyond** the PRD, not one the PRD already made.
 
-- **#28 is deferred, not rejected.** It proposes replacing the blanket `--disallowedTools mcp__*` deny with an explicit allowlist plus `--strict-mcp-config`. The argument is sound — an allowlist is the better shape, and a namespace deny cannot tell the owner's Gmail from a server this product deliberately installed. But the only capability the deny currently forecloses is chrome-devtools and playwright, which are out of scope, so the deny costs nothing today and the allowlist buys nothing yet. Revisit it when a tool genuinely needs granting, and verify with the `system/init` event as `research.md` requires — the baseline to beat is 21 tools, Read and Write present, Bash and every `mcp__*` absent.
-- The PRD's own promise still stands and is still unbuilt: reaching the dashboard from a phone through an authenticated tunnel. That is the product goal, not browser control.
+What follows, so the reasoning is not lost:
+
+- **`--disallowedTools mcp__*` — deferred, and that part is decided.** #28 proposes replacing the blanket deny with an allowlist plus `--strict-mcp-config`. The argument is sound: an allowlist is the better shape, and a namespace deny cannot tell the owner's Gmail from a server this product installed deliberately. But the only capability that deny forecloses is chrome-devtools and playwright, now out of scope, so it costs nothing today and the allowlist buys nothing yet. Revisit when a tool genuinely needs granting, verifying with the `system/init` event as `research.md` requires — baseline to beat: 21 tools, Read and Write present, Bash and every `mcp__*` absent.
+- **`--restricted` removing `Bash` — NOT decided, and it is a prerequisite for the PRD's own shell-with-approvals path.** This is a separate fact from the bullet above and was previously folded into it. `research.md` records that `--restricted` removes Bash along with the config-file MCP servers. So the shipped posture forecloses running any command at all, which is the capability TASK_016 and TASK_018 are built around. It needs its own answer when that work is picked up.
+- **TASK_018 has nothing to approve today.** `--permission-mode acceptEdits` applies edits without asking and there is no `Bash` to ask about, so "render permission requests as actionable cards" has no input until the tool posture changes. Worth knowing before starting that task rather than after.
+- **`$DATA_DIR/workspace` is not a "configured root"** in the sense of PRD line 1081. It is a single fixed scratch directory — the MVP stand-in for that feature, not an implementation of it.
+- **The PRD's own headline promise is still unbuilt:** reaching the dashboard from a phone through an authenticated tunnel. That, not browser control, is the product goal.
 
 ## Next steps (resume here)
 
-State on 2026-09-25, end of the live-run session. The product is the MVP vertical slice on `feat/mvp-claude-adapter`: the Claude Code adapter, the streaming HTTP server and the chat UI. `npm run validate` exits 0 on it, all eleven checks, 214 unit tests, 10 integration, 84 repository tests and 2 browser tests. To confirm before starting, run `nvm use`, `git pull`, `npm run validate`. The working rules and shell pitfalls are in `research.md`. Read the last entry of `progress.md` first.
+### Checkpoint — 2026-09-26
+
+**Where this is.** `main` is at the merge of PR #38. Everything below is merged and working: an adapter that drives Claude Code, persistence, device-pairing authentication, and a browser UI. `npm run validate` exits 0 with no warnings — 263 unit tests, 10 integration, 84 repository, 3 browser, branch coverage 85.41 percent, scans clean.
+
+**To confirm before starting anything:**
+
+```
+cd ~/Downloads/1-git/app-quack-command-center && nvm use && git pull && npm run validate
+```
+
+**What the product does today.** Open `http://127.0.0.1:4317`, pair the browser once with a code printed in the terminal, and hold a conversation with Claude Code. Conversations are saved and listed in a sidebar; reopening one resumes the same provider session, so the agent still has its context. Restarting the server loses nothing. The agent may read and write files in `$DATA_DIR/workspace` and has no shell, no access to the owner's connectors, and none of their personal skills.
+
+**To run it:**
+
+```
+nvm use && npm run build
+DATA_DIR=~/quack-data node apps/server/dist/index.js
+```
+
+First start prints a pairing code; later starts say how many devices are paired and print no code. `README.md` is accurate and was verified by following its own setup steps into a fresh clone.
+
+### The three things that would make this genuinely useful, in order
+
+None of these has a GitHub issue. They are the actual product gaps.
+
+1. **A button to pair a second device, and a list of paired devices.** `POST /api/pairing-code` already exists and is authenticated, but nothing in the interface calls it, so adding a device means restarting with `QUACK_PAIR=1`. A device list also gives per-device revocation, where today only "log out everywhere" exists. Smallest of the three and it finishes what authentication started.
+2. **Remote access through an authenticated tunnel** (Phase 6, TASK_023). This is the PRD's headline promise and the reason the product exists. Now unblocked by authentication. **Order is fixed and is an owner gate:** Cloudflare Access application and policy first, tunnel route second, and no public hostname without explicit approval. Two known items land here: `x-forwarded-proto` is currently trusted from anyone (see the open issue), and a `Secure` cookie needs HTTPS end to end — which the tunnel provides and a bare LAN address does not.
+3. **Shell with approvals** — the PRD's own path, needing `--permission-prompts host` with `--input-format stream-json`, and a decision about `--restricted` removing `Bash`. Read the scope section above first: TASK_018 has nothing to approve until this changes.
+
+### Open issues, all deliberately deferred
+
+Every one has the reasoning recorded on the issue itself. None blocks using the dashboard.
+
+| Issue | What it is | Why it waits |
+|---|---|---|
+| #37 pt 2 | `x-forwarded-proto: https` trusted from anyone | The right answer depends on the tunnel design. Do it at TASK_023. |
+| #28 | Blanket `mcp__*` deny should be an allowlist | Scope decision above. Costs nothing while no MCP tool is wanted. |
+| #24 | Scanner: commit messages, shallow clones | One part needs a policy decision — this repo mandates a `Co-Authored-By` trailer, so scanning messages flags every commit. |
+| #14 | `apps/web/tsconfig.json` does not extend the base config | Web code misses `noImplicitOverride`. Strongest of the hygiene set; may surface errors in the `.tsx` files. |
+| #15 | `PORT=0` rejected | Premise never materialised: the test kit calls `listen(0)` directly. |
+| #12 | `VITE_` name guard has no allowlist | There are zero `VITE_` variables in the tree. |
+
+### How to work here
+
+Read `research.md` before touching provider flags or the reachability check — it records approaches that look right and are not. The working rules that cost real time are in its "Shell and workflow pitfalls" section. In short: write the failing test first, mutation-check every new guard **and confirm the mutation actually applied**, never claim a result before the evidence exists, and chain commands with `&&` because a pipe hides a failure.
 
 **The slice is live-verified.** The owner approved the first live provider gate and the real CLI has now been driven end to end: streaming, `--resume` continuity, workspace isolation, tool events and the browser UI. That gate is closed. Two defects it found are fixed, and the verified provider behaviour behind them is in `research.md` under "Verified provider behaviour" — read it before touching adapter flags, because three plausible-looking approaches there are wrong.
 

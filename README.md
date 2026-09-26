@@ -350,7 +350,7 @@ HOST must be a loopback address (127.0.0.1, ::1 or localhost). Remote access goe
 through a tunnel to loopback, never by binding a public interface.
 ```
 
-This is on purpose, and the refusal matters more than usual right now: there is no login yet, so a server on a public interface would hand anyone who found it the ability to run an agent on your machine. Remote access is meant to arrive as an authenticated tunnel, not an open port.
+This is on purpose. Pairing protects the dashboard, but binding a public interface would put the login itself on the internet with no policy in front of it, and the session cookie is `Secure`, which a plain-HTTP address other than loopback will not accept anyway. Remote access is meant to arrive as an authenticated tunnel, not an open port.
 
 ---
 

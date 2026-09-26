@@ -257,3 +257,27 @@ Also found and fixed while wiring the browser: `reset()` sent `DELETE /api/sessi
 Evidence: `npm run validate` exits 0, all eleven checks. 214 unit tests, 10 integration, 84 repository, 2 browser.
 
 Deliberately not built, and not to be mistaken for done: a button to pair a second device (the endpoint exists and is authenticated, but nothing calls it, so adding a phone means `QUACK_PAIR=1`), a list of paired devices with per-device revocation, Zod schemas on every route, structured logging with redaction, and the `audit_events` table.
+
+## 2026-09-25 (review of #26: two merge blockers fixed)
+
+The review found two defects in `apps/server/src/app.ts`, both with reproductions attached, and filed everything else as issues #27–#34 rather than holding them against the PR. Both blockers were verified against the code, reproduced with a failing test, then fixed.
+
+**The `busy` guard was checked before the body was read.** The check sat above `await readBody(request)` and the set sat far below it, after parsing, the session lookup and the first `appendMessage`. A check on one side of an await with the set on the other is a race: two requests whose bodies arrive in a second segment — which is what any slow link does on its own — both passed it. The consequence is two `claude` processes in one workspace, two interleaved NDJSON streams, and both turns racing on `providerSessionId`, `storedSessionId` and the transcript. Worse than the review described: because the user's message was written before the slot was claimed, a race duplicated the question too, and there is now a test for that specifically. Fixed by claiming the slot immediately after the 409 check and releasing it in a `finally` that covers every early return.
+
+The existing test passed only because it slept 50ms between the two requests. Its comment now says so and points at the new test, which fires both concurrently with no sleep, sending each body in a second write through a raw socket — `fetch` sends headers and body together, which is exactly what hid this.
+
+**A client that hung up mid-answer wedged the single turn slot until a restart.** The backpressure wait listened for `drain` only, so when the socket died the event never came, the await never settled, and the `finally` that frees the slot never ran: every later turn answered 409 forever. `runTurn` was also called without the `signal` the adapter has always accepted, so the orphaned `claude` process kept running and kept spending quota with nobody reading it. Fixed by racing the wait against the connection closing, breaking out when the response is destroyed, and passing an abort signal.
+
+**Two defects came out of writing that second fix**, both found here rather than in production.
+
+The first version listened for `close` on the **request**. That fires as soon as the body has been read — the normal path — so it aborted every turn the instant it started. With the real adapter that kills the `claude` process immediately, and every fake-runner test still passed, because the fakes ignore the signal. It now listens to the response closing and checks `writableFinished` to tell a connection that died early from one that simply finished. A regression test asserts that an ordinary turn is not aborted.
+
+The backpressure race attached `drain`, `close` and `error` handlers per cycle, and `once` removes only the handler that fires, so two leaked every time. A long answer tripped Node's `MaxListenersExceededWarning`, which `npm run validate` printed. All three are now removed when the race settles, and the flood test asserts that warning never appears — the test output has to be pristine, not merely green.
+
+Mutation results on the fixes: claiming the slot late again fails two tests, removing the abort signal fails one, aborting without the `writableFinished` check fails one, and removing the close and error events from the backpressure wait fails one. That last mutation **survived at first**, which was the useful finding: none of the original tests forced `response.write` to return false, so the wait was never reached. A test that floods 15 MB at a client which reads nothing now covers it.
+
+Also corrected, both statements of mine that had become false rather than new work: the README still justified the loopback restriction with "there is no login yet" (#33), and `AppOptions.store` still described a no-store mode as supported and `/api/health` as reporting `persistent: false` (#30). The PR description still said "Deliberately absent: persistence, authentication", which was true of its first three commits and not of the branch; it has been rewritten.
+
+Evidence: `npm run validate` exits 0 with no warnings. 220 unit tests, 10 integration, 84 repository, 2 browser. Branch coverage 84.57 percent. Scans clean over 61 commits.
+
+Not addressed here, deliberately: issues #27, #28, #29, #31, #32, #34. #31 (the pairing route is exempt from the same-origin check) and #29 (a `Secure` cookie cannot work over plain HTTP on a non-loopback address) are the two worth reading first, because both touch the authentication that just landed.

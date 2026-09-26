@@ -160,7 +160,11 @@ describe('a turn', () => {
       method: 'POST',
       body: JSON.stringify({ text: 'one' }),
     });
-    // Give the first request time to claim the slot.
+    // The sleep is not what makes the guard work, and this test is not the one
+    // that proves it: it only checks that a second turn during a first gets 409.
+    // Review pointed out that this sleep was hiding a race — the slot used to be
+    // claimed after the body was read, so two requests arriving together both
+    // got through. `turnSlot.test.ts` fires them concurrently with no sleep.
     await new Promise((r) => setTimeout(r, 50));
     const second = await fetch(`${base}/api/turn`, {
       method: 'POST',

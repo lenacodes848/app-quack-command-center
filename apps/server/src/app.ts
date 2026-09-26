@@ -33,10 +33,17 @@ export interface AppOptions {
   /** Injected so tests can drive a fake CLI instead of spending quota. */
   runTurn?: TurnRunner | undefined;
   /**
-   * Where conversations are kept. Omit to run without persistence, which a
-   * throwaway run or a test that does not care may want; a restart then loses
-   * the thread, and `/api/health` reports `persistent: false` so the browser
-   * can say so rather than implying the history is safe.
+   * Where conversations and paired devices are kept.
+   *
+   * Required in practice. Sessions live in the store, so without one nothing can
+   * pair and every `/api` route answers 401 — which is safe but not a usable
+   * mode. It stays optional in the type only because a few tests construct an
+   * app that never reaches an authenticated route.
+   *
+   * This comment used to describe running "without persistence" as a supported
+   * choice, and to say `/api/health` would report `persistent: false`. Neither is
+   * true since authentication landed: health answers `{ ok: true }` and nothing
+   * else, because it replies before a caller is known.
    */
   store?: Store | undefined;
   /**
@@ -147,13 +154,47 @@ async function streamTurn(
   const spoken: string[] = [];
   let failure: string | undefined;
 
+  // Writing to a destroyed response emits 'error', and with no listener that
+  // surfaces as an unhandled stream error and takes the process down. There is
+  // nothing to do about it here beyond not dying: the client is gone.
+  response.on('error', () => {
+    // Deliberately empty. The loop below notices via `destroyed`.
+  });
+
+  // Read through a function rather than the property directly. TypeScript
+  // narrows `response.destroyed` to false after the first check and does not
+  // widen it again across an await, so a second direct check is reported as
+  // always-falsy dead code — when in fact the await is exactly when it changes.
+  const clientGone = (): boolean => response.destroyed;
+
   try {
     for await (const event of events) {
+      if (clientGone()) break;
       if (event.type === 'session') onSession(event.sessionId, event.model);
       if (event.type === 'text') spoken.push(event.text);
       if (event.type === 'error') failure = event.message;
       if (!response.write(`${JSON.stringify(event)}\n`)) {
-        await new Promise((r) => response.once('drain', r));
+        // Waiting on 'drain' alone never settles when the socket has died, and
+        // the caller's `finally` — the one that frees the single turn slot —
+        // then never runs, so every later turn answers 409 until a restart.
+        // Racing the close and error events is what bounds this wait to the
+        // life of the connection.
+        await new Promise<void>((resolve) => {
+          const done = (): void => {
+            // All three come off, not just the one that fired. `once` removes
+            // only the handler it invoked, so leaving the others attached leaks
+            // two listeners per backpressure cycle — which Node reports as a
+            // possible memory leak once a long answer passes ten of them.
+            response.off('drain', done);
+            response.off('close', done);
+            response.off('error', done);
+            resolve();
+          };
+          response.once('drain', done);
+          response.once('close', done);
+          response.once('error', done);
+        });
+        if (clientGone()) break;
       }
     }
   } catch (thrown) {
@@ -416,61 +457,89 @@ export function createApp(options: AppOptions) {
           sendJson(response, 405, { error: 'Use POST.' });
           return;
         }
-        // One turn at a time. Two concurrent turns would interleave their
-        // output and race on the session id.
+        // One turn at a time, and the slot is claimed HERE — before the body is
+        // read, not after. Reading the body is an await, and a check on one side
+        // of an await with the set on the other is a race: two requests whose
+        // bodies arrive in a second segment, which is what any slow link does,
+        // both pass the check. That admitted two `claude` processes into one
+        // workspace, interleaved their streams, and raced on both session ids
+        // and on the transcript. Every early return below therefore has to
+        // release the slot, which is what the `finally` is for.
         if (busy) {
           sendJson(response, 409, { error: 'A turn is already running.' });
           return;
         }
-
-        let prompt: string;
-        let wantedSession: string | undefined;
-        try {
-          const parsed: unknown = JSON.parse(await readBody(request));
-          const body =
-            typeof parsed === 'object' && parsed !== null
-              ? (parsed as Record<string, unknown>)
-              : {};
-          const text = body['text'];
-          if (typeof text !== 'string' || text.trim() === '') {
-            sendJson(response, 400, { error: 'Send { "text": "..." } with a non-empty message.' });
-            return;
-          }
-          prompt = text;
-          if (typeof body['sessionId'] === 'string') wantedSession = body['sessionId'];
-        } catch {
-          sendJson(response, 400, { error: 'Body must be JSON.' });
-          return;
-        }
-
-        // Continuing a stored conversation, perhaps one from before a restart.
-        // Its provider id comes from the store rather than from memory, which is
-        // the whole point of writing it down.
-        if (wantedSession !== undefined && wantedSession !== storedSessionId) {
-          const existing = store?.getSession(wantedSession);
-          if (existing === undefined) {
-            sendJson(response, 404, { error: 'No such conversation.' });
-            return;
-          }
-          storedSessionId = existing.id;
-          providerSessionId = existing.providerSessionId;
-        }
-
-        if (store !== undefined && storedSessionId === undefined) {
-          storedSessionId = store.createSession({ workspaceDir: options.workspaceDir }).id;
-        }
-
-        // Written before the turn runs. If the process dies mid-answer the
-        // question is still in the transcript, which is the honest record.
-        if (store !== undefined && storedSessionId !== undefined) {
-          store.appendMessage(storedSessionId, { role: 'user', content: prompt });
-        }
-
         busy = true;
+
+        // If the client goes away mid-answer, stop the agent rather than leaving
+        // it to finish for nobody and spend quota doing it.
+        //
+        // This listens to the RESPONSE closing, not the request. The request
+        // stream emits 'close' as soon as its body has been read, which is the
+        // normal path — listening there aborted every turn the moment the body
+        // arrived, killing the real `claude` process immediately. The fake
+        // runners in the tests ignore the signal, so only the live product would
+        // have shown it. `writableFinished` is what distinguishes a connection
+        // that died early from a response that simply finished.
+        const aborter = new AbortController();
+        response.once('close', () => {
+          if (!response.writableFinished) aborter.abort();
+        });
+
         try {
+          let prompt: string;
+          let wantedSession: string | undefined;
+          try {
+            const parsed: unknown = JSON.parse(await readBody(request));
+            const body =
+              typeof parsed === 'object' && parsed !== null
+                ? (parsed as Record<string, unknown>)
+                : {};
+            const text = body['text'];
+            if (typeof text !== 'string' || text.trim() === '') {
+              sendJson(response, 400, {
+                error: 'Send { "text": "..." } with a non-empty message.',
+              });
+              return;
+            }
+            prompt = text;
+            if (typeof body['sessionId'] === 'string') wantedSession = body['sessionId'];
+          } catch {
+            sendJson(response, 400, { error: 'Body must be JSON.' });
+            return;
+          }
+
+          // Continuing a stored conversation, perhaps one from before a restart.
+          // Its provider id comes from the store rather than from memory, which is
+          // the whole point of writing it down.
+          if (wantedSession !== undefined && wantedSession !== storedSessionId) {
+            const existing = store?.getSession(wantedSession);
+            if (existing === undefined) {
+              sendJson(response, 404, { error: 'No such conversation.' });
+              return;
+            }
+            storedSessionId = existing.id;
+            providerSessionId = existing.providerSessionId;
+          }
+
+          if (store !== undefined && storedSessionId === undefined) {
+            storedSessionId = store.createSession({ workspaceDir: options.workspaceDir }).id;
+          }
+
+          // Written before the turn runs. If the process dies mid-answer the
+          // question is still in the transcript, which is the honest record.
+          if (store !== undefined && storedSessionId !== undefined) {
+            store.appendMessage(storedSessionId, { role: 'user', content: prompt });
+          }
+
           await streamTurn(
             response,
-            runTurn({ prompt, cwd: options.workspaceDir, sessionId: providerSessionId }),
+            runTurn({
+              prompt,
+              cwd: options.workspaceDir,
+              sessionId: providerSessionId,
+              signal: aborter.signal,
+            }),
             (id, model) => {
               providerSessionId = id;
               if (store !== undefined && storedSessionId !== undefined) {

@@ -1,6 +1,6 @@
 # Plan
 
-Last updated: 2026-09-25
+Last updated: 2026-09-27
 
 Full phase plan: `docs/superpowers/plans/2026-09-24-personal-ai-command-center.md`
 
@@ -41,7 +41,7 @@ What follows, so the reasoning is not lost:
 
 ### Checkpoint — 2026-09-26
 
-**Where this is.** `main` is at the merge of PR #38. Everything below is merged and working: an adapter that drives Claude Code, persistence, device-pairing authentication, and a browser UI. `npm run validate` exits 0 with no warnings — 263 unit tests, 10 integration, 84 repository, 3 browser, branch coverage 85.41 percent, scans clean.
+**Where this is.** Everything below is merged to `main` and working: an adapter that drives Claude Code, persistence, device-pairing authentication, and a browser UI. `npm run validate` exits 0 with no warnings and the scans are clean. The exact test counts and coverage live in the last `progress.md` entry, which is dated; they are deliberately not repeated here, because a copy in this checkpoint goes stale on the next merge (#45).
 
 **To confirm before starting anything:**
 

@@ -2,9 +2,9 @@
 
 **Your coding agents, from anywhere.**
 
-A small web dashboard that runs on your own computer and lets you talk to Claude Code through a browser instead of a terminal. You type a message, the agent answers, and the whole conversation is saved so you can close the window, restart your computer, and pick the same conversation up where you left it.
+A small web dashboard that runs on your own computer and lets you run several Claude Code agents at once from a browser instead of a terminal. You launch an agent in one of your projects and give it a task; it works in the background, each on its own git branch, while you launch others or close the tab. Every conversation is saved, so you can restart your computer and pick any of them up where you left it.
 
-If you have never used this before, read [Before you start](#before-you-start) and then [Setup](#setup). Every command is written out in full.
+If you have never used this before, read [Before you start](#before-you-start) and then follow [Setup](#setup) from Step 1 to Step 9. Every command is written out in full.
 
 ---
 
@@ -126,7 +126,7 @@ claude --version
 claude --print "say hello"
 ```
 
-The first prints a version (this was built against `2.1.282`). The second must print a greeting. **If the second says `Not logged in · Please run /login`, run `claude` on its own and log in before going further** — the dashboard uses your existing login and cannot log in for you.
+The first prints a version (this is tested against `2.1.283`). The second must print a greeting. **If the second says `Not logged in · Please run /login`, run `claude` on its own and log in before going further** — the dashboard uses your existing login and cannot log in for you.
 
 **Why:** the dashboard does not talk to Anthropic directly. It runs the same `claude` command you would, so your subscription and your login are what authorise it.
 
@@ -136,11 +136,13 @@ The first prints a version (this was built against `2.1.282`). The second must p
 git --version
 ```
 
+**Why:** each agent working in a git repository gets its own worktree, which needs git 2.5 or later. Any git from the last several years qualifies.
+
 ---
 
 ## Setup
 
-Five steps, once.
+Nine steps, once. By the end you will have an agent working in one of your projects. Every command runs in a terminal; copy them exactly.
 
 ### Step 1 — Get the code
 
@@ -148,6 +150,8 @@ Five steps, once.
 git clone https://github.com/lenacodes848/app-quack-command-center.git
 cd app-quack-command-center
 ```
+
+Every later command assumes you are still in this `app-quack-command-center` folder.
 
 ### Step 2 — Switch to the right Node version
 
@@ -192,9 +196,11 @@ This compiles the server and bundles the web page. Expect something ending in:
 ✓ built in 108ms
 ```
 
-### Step 5 — Choose a folder for your data
+Run this again after every `git pull`: the server runs the built files, not the source.
 
-The server needs one directory to keep everything in. Make it somewhere permanent:
+### Step 5 — Choose a folder for the dashboard's own data
+
+The server keeps its database and the agents' worktrees in one directory. Make it somewhere permanent:
 
 ```bash
 mkdir -p ~/quack-data
@@ -202,11 +208,79 @@ mkdir -p ~/quack-data
 
 > **Do not use a folder inside `/tmp`.** macOS and Linux clear `/tmp`, which would silently delete every saved conversation. The path must also be **absolute** (starting with `/` or `~`), not relative.
 
+### Step 6 — Choose the folder that holds your projects
+
+Agents can only work in projects you have approved, and you approve them by naming the folder they live in. Every folder **directly inside** it becomes a project you can pick.
+
+If your projects already live together, for example in `~/Projects`, use that. Otherwise make one and move or clone projects into it:
+
+```bash
+mkdir -p ~/Projects
+```
+
+Check it holds what you expect:
+
+```bash
+ls ~/Projects
+```
+
+Three things worth knowing before you pick a project:
+
+- **A git repository is the safe choice.** Each agent gets its own copy of it on its own branch (a *git worktree*), and your checkout is never touched. The repository needs **at least one commit**, because the agent's branch starts from your current commit. A brand-new repository needs `git commit` first.
+- **A folder that is not a git repository works too, but the agent edits your real files,** and only one agent can work there at a time.
+- **`~/Downloads`, `~/Desktop` and `~/Documents` work when you start the server from a terminal,** because it has your terminal's access. macOS protects those folders, so a server started some other way, such as a login service, may be refused access to them.
+
+### Step 7 — Start the server
+
+```bash
+QUACK_PROJECT_ROOTS=~/Projects DATA_DIR=~/quack-data node apps/server/dist/index.js
+```
+
+You should see these lines, with your own home directory in place of `~`:
+
+```
+Quack Command Center on http://127.0.0.1:4317
+Project folders: ~/Projects
+Conversations: ~/quack-data/quack.db
+Pairing code: P32C-7W0P-P4
+Also written to ~/quack-data/pairing-code — it expires in ten minutes and can be used once.
+```
+
+**Leave this terminal open.** The server runs until you press Ctrl+C. Your code will differ from the one above.
+
+If the second line says `No project folders configured`, `QUACK_PROJECT_ROOTS` did not reach the server: check the spelling, and that it is on the same line as the command.
+
+### Step 8 — Pair your browser
+
+1. Open **<http://127.0.0.1:4317>** in a browser on the same computer.
+2. You will see a box asking for a pairing code.
+3. Type the code from the terminal. **Case and dashes do not matter** — `p32c7w0pp4` works as well as `P32C-7W0P-P4`. The letters I, L, O and U never appear in a code, so if you think you see one it is a 1 or a 0, and typing either works.
+4. Click **Pair this device**.
+
+You will see a header with a duck, and on the left an empty list of agents with a **New agent** button.
+
+That is the only time you pair this browser. The session lasts **90 days**, or **14 days** without using it, and survives restarting the server and your computer. **If the ten minutes run out,** stop the server with Ctrl+C and start it again with `QUACK_PAIR=1` in front of the command for a fresh code.
+
+### Step 9 — Launch your first agent
+
+1. Click **New agent**.
+2. Pick a **project**. Under the list, the form says whether it is a git repository and what that means for where the agent works.
+3. Give it a **name**, for example `Explain this project`. The name is shown in the list and becomes part of the agent's branch.
+4. Leave the **model** on the default, or pick Opus, Sonnet or Haiku.
+5. Type a **first message**: `What does this project do? Read the README and summarise it.`
+6. Click **Launch**.
+
+The agent appears at the top of the list marked **Working**, and its reply streams in on the right. When it finishes, it is marked **Idle**. That is the whole loop — see [Using it](#using-it) for everything else you can do.
+
+Optionally, click **Turn on notifications** in the header and allow it, so your browser tells you when an agent finishes or fails while you are looking at something else.
+
 ---
 
 ## Running it
 
-### Start the server
+Day to day, after setup.
+
+### Start it
 
 From the project directory, in a terminal where you have run `nvm use`:
 
@@ -214,73 +288,26 @@ From the project directory, in a terminal where you have run `nvm use`:
 QUACK_PROJECT_ROOTS=~/Projects DATA_DIR=~/quack-data node apps/server/dist/index.js
 ```
 
-`QUACK_PROJECT_ROOTS` is the folder that holds your projects. Every folder directly inside it can be picked when you launch an agent. Several roots are separated by `:`, the way `PATH` is.
-
-You should see exactly three lines, with your own home directory expanded in place of `~`:
-
-```
-Quack Command Center on http://127.0.0.1:4317
-Project folders: ~/Projects
-Conversations: ~/quack-data/quack.db
-```
-
-Those three lines tell you the address to open, where agents may work, and the file your conversations are saved to. Without `QUACK_PROJECT_ROOTS` the middle line says none are configured, and the launch form explains how to set it.
-
-On a **first** start there will be two more lines, because no browser is paired yet:
-
-```
-Pairing code: P32C-7W0P-P4
-Also written to ~/quack-data/pairing-code — it expires in ten minutes and can be used once.
-```
-
-On later starts, when a device is already paired, you get this instead — no code, because printing a live credential at every restart would be a standing invitation:
+Once a browser is paired, no code is printed — printing a live credential at every restart would be a standing invitation. You get this instead:
 
 ```
 1 paired device(s). Pair another from one of them, or restart with QUACK_PAIR=1.
 ```
 
-### Pair your browser
-
-1. Go to **<http://127.0.0.1:4317>**.
-2. You will see a box asking for a pairing code.
-3. Type the code from the terminal. **Case and dashes do not matter** — `p32c7w0pp4` works as well as `P32C-7W0P-P4`. The letters I, L, O and U never appear in a code, so if you think you see one it is a 1 or a 0, and typing either works.
-4. Click **Pair this device**.
-
-That is the only time you do this on that browser. The session lasts **90 days**, or **14 days** without using it, and survives restarting the server and your computer.
-
-> **If you started the server in the background** and the code went to a log file, it will not be there: it is deliberately printed only when a terminal is watching, so it never lands in a log. Read it from the file instead:
->
-> ```bash
-> cat ~/quack-data/pairing-code
-> ```
-
-**If you miss the ten-minute window,** stop the server and start it again for a fresh code.
-
-**Pairing a phone does not work yet, and it is worth being precise about why** — there are two separate blockers, not one:
-
-1. **The phone cannot reach the server.** It only ever listens on loopback, so there is no address on your network for a phone to open. That is what the authenticated tunnel is for, and it is not built.
-2. **Even if it could reach it, a bare LAN address cannot hold the session.** The session cookie is `Secure`, and browsers only treat loopback and HTTPS as trustworthy — a `http://192.168.x.x` address would accept the response and silently throw the cookie away. Rather than let that happen, the server **refuses to pair** from such an address and says so, leaving your code unused. (Loopback is fine: browsers count it as trustworthy, which was verified rather than assumed.)
-
-So today the dashboard is a desktop browser on the same machine. The endpoint for adding a second device exists and is authenticated, but nothing in the interface calls it, so even locally a second browser means restarting with `QUACK_PAIR=1`.
-
-**If you lose every paired device,** start the server with `QUACK_PAIR=1` to force a new code:
+Several project folders are separated by `:`, the way `PATH` is:
 
 ```bash
-QUACK_PAIR=1 DATA_DIR=~/quack-data node apps/server/dist/index.js
+QUACK_PROJECT_ROOTS=~/Projects:~/work DATA_DIR=~/quack-data node apps/server/dist/index.js
 ```
-
-### What you should see once paired
-
-A header with a duck, and the list of agents on the left with a **New agent** button. On a phone the list fills the screen, and opening an agent switches to it.
 
 ### Stop it
 
-Press **Ctrl+C** in the terminal. Any agent in the middle of an answer is stopped, what it had said so far is saved with a note that the server stopped, and it is marked *interrupted*. Send it another message after you restart to carry on.
+Press **Ctrl+C** in the terminal. Any agent in the middle of an answer is stopped, what it had said so far is saved with a note that the server stopped, and it is marked *interrupted*. Send it another message after you restart to carry on; it still remembers the conversation.
 
 ### Leave it running in the background
 
 ```bash
-DATA_DIR=~/quack-data nohup node apps/server/dist/index.js > ~/quack-data/server.log 2>&1 &
+QUACK_PROJECT_ROOTS=~/Projects DATA_DIR=~/quack-data nohup node apps/server/dist/index.js > ~/quack-data/server.log 2>&1 &
 ```
 
 To stop a server you started that way:
@@ -288,6 +315,44 @@ To stop a server you started that way:
 ```bash
 lsof -ti tcp:4317 | xargs kill
 ```
+
+A plain `kill` stops it the same way Ctrl+C does. Avoid `kill -9`, which skips saving what running agents had said.
+
+> **A pairing code is never written to the log.** It is printed only when a terminal is watching. For a background server, read it from the file instead:
+>
+> ```bash
+> cat ~/quack-data/pairing-code
+> ```
+
+### Pair another browser, or get back in
+
+A second browser on the same computer, or a way back in after logging out everywhere, needs a fresh code. Stop the server and start it with `QUACK_PAIR=1`:
+
+```bash
+QUACK_PAIR=1 QUACK_PROJECT_ROOTS=~/Projects DATA_DIR=~/quack-data node apps/server/dist/index.js
+```
+
+There is no button for this yet; it is planned.
+
+### Why a phone cannot pair yet
+
+There are two separate blockers, not one:
+
+1. **The phone cannot reach the server.** It only ever listens on loopback, so there is no address on your network for a phone to open. That is what the authenticated tunnel is for, and it is not built.
+2. **Even if it could reach it, a bare LAN address cannot hold the session.** The session cookie is `Secure`, and browsers only treat loopback and HTTPS as trustworthy — a `http://192.168.x.x` address would accept the response and silently throw the cookie away. Rather than let that happen, the server **refuses to pair** from such an address and says so, leaving your code unused. (Loopback is fine: browsers count it as trustworthy, which was verified rather than assumed.)
+
+So today the dashboard is a browser on the same computer as the server. The layout already works at phone width, ready for when the tunnel lands.
+
+### Updating to a newer version
+
+```bash
+git pull
+nvm use
+npm install
+npm run build
+```
+
+Then restart the server. Your data folder is untouched by updates; a newer version upgrades the database in place the first time it starts.
 
 ---
 
@@ -459,7 +524,7 @@ The dashboard starts the agent with three deliberate restrictions. This is a sec
 
 That last one was a real bug, found by running this for the first time. The agent's very first reply listed the owner's connected Gmail, Calendar, Drive and scheduling tools, unprompted — the workspace was isolated but the *account* was not. Fixing it needed two separate flags, because restricted mode alone removes tools that come from configuration files and leaves everything attached to the signed-in account. Without the fix, reaching this dashboard would have meant reaching that person's email.
 
-**What this does not protect against:** anything already running as you on your machine can read the database and the workspace. The restrictions limit what the *agent* can reach, not what your own computer can. The same is true of pairing: a process running as you could read the pairing-code file while a code is live.
+**What this does not protect against:** anything already running as you on your machine can read the database and the worktrees. The restrictions limit what the *agent* can reach, not what your own computer can. The same is true of pairing: a process running as you could read the pairing-code file while a code is live.
 
 ---
 
@@ -474,8 +539,12 @@ You are probably not in the project directory. `nvm use` with no argument looks 
 You started the server without saying where to keep data:
 
 ```bash
-DATA_DIR=~/quack-data node apps/server/dist/index.js
+QUACK_PROJECT_ROOTS=~/Projects DATA_DIR=~/quack-data node apps/server/dist/index.js
 ```
+
+### `QUACK_PROJECT_ROOTS entries must be absolute paths`
+
+One of the folders is relative, such as `Projects`. Use `~/Projects` or a full path starting with `/`.
 
 ### `Invalid configuration: DATA_DIR must be an absolute path.`
 
@@ -486,8 +555,33 @@ You used a relative path like `data`. Use a full path, or `~/quack-data`.
 A previous server is still running. Either use it, or stop it:
 
 ```bash
-lsof -ti tcp:4317 | xargs kill -9
+lsof -ti tcp:4317 | xargs kill
 ```
+
+### The launch form says "No project folders are configured"
+
+The server was started without `QUACK_PROJECT_ROOTS`. Stop it and start it again as in [Step 7](#step-7--start-the-server). The launch form lists folders directly inside that folder; if it is empty, so is the list.
+
+### "That repository has no commits yet"
+
+An agent's branch starts from your current commit, and a new repository has none. In that project:
+
+```bash
+git add -A
+git commit -m "First commit"
+```
+
+### "4 agents are already working, which is the limit"
+
+Wait for one to finish, stop one, or start the server with a higher `QUACK_MAX_AGENTS` (up to 16). The agent you were launching was still created; send it the message again once there is room.
+
+### "Another agent is working in this folder"
+
+That project is not a git repository, so agents there share its files and take turns. Wait, or make it a repository (`git init`, then a first commit) so each agent gets its own worktree.
+
+### I cannot find the changes an agent made
+
+They are on the agent's branch, in its worktree, not in your checkout. The branch is shown at the top of the agent. From your project, `git log quack/<branch-name>` shows its commits if it made any, and `git worktree list` shows where its files are. Merge the branch when you want the changes.
 
 ### The reply says it could not do something because permission was denied
 
@@ -527,7 +621,7 @@ Check the server is actually up:
 curl http://127.0.0.1:4317/api/health
 ```
 
-A healthy server answers `{"ok":true}` and nothing more — that endpoint answers before authentication, so it deliberately says nothing about whether anyone is paired or what is running. To see the rest you must be paired, and then `/api/me` carries it.
+If nothing answers, start the server ([Step 7](#step-7--start-the-server)). A healthy server answers `{"ok":true}` and nothing more — that endpoint answers before authentication, so it deliberately says nothing about whether anyone is paired or what is running. To see the rest you must be paired, and then `/api/me` carries it.
 
 ### My conversations vanished
 
@@ -586,8 +680,8 @@ Also absent: attachments, and support for agents other than Claude Code.
 
 ```
 apps/
-  server/     HTTP server, routes, streaming, persistence wiring
-  web/        React + Tailwind chat UI
+  server/     HTTP server: routes, agent registry, event stream, worktrees
+  web/        React + Tailwind dashboard: agent list, launch form, agent view
 packages/
   adapter/    runs the claude CLI and normalises its output
   storage/    SQLite conversation store

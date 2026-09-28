@@ -57,6 +57,13 @@ describe('canHoldSecureCookie', () => {
     ['1270.0.0.1'],
     ['127.0.0.1.evil.example'],
     ['[::2]:4317'],
+    // `(?:0*:)*` allowed ZERO colon groups, so the IPv6 loopback pattern
+    // collapsed to `0*1` and matched a host with no colons at all. A browser
+    // reads `http://1/` as 0.0.0.1, which is not loopback.
+    ['1'],
+    ['1:4317'],
+    ['01'],
+    ['0001'],
   ])('rejects %s over plain HTTP, because the cookie would be discarded', (host) => {
     expect(canHoldSecureCookie({ host, forwardedProto: undefined })).toBe(false);
   });

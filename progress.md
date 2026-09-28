@@ -353,3 +353,22 @@ All three are left open with that recorded, rather than fixed against a motivati
 Mutation results: removing the pairing origin check fails three tests, moving it after the address check fails one, and restoring the old replace ordering fails one.
 
 Evidence: `npm run validate` exits 0 with no warnings. 263 unit tests, 10 integration, 84 repository, 3 browser. Branch coverage 85.41 percent. Scans clean over 67 commits.
+
+## 2026-09-26 (checkpoint: a bug of mine, two rationales of mine, and a clean issue list)
+
+#38 merged. Its review filed two new issues, both about things I had just written, and both correct. Fixed here so the checkpoint is not built on a known bug and known-wrong documentation.
+
+**#39 — `canHoldSecureCookie` accepted `Host: 1` as IPv6 loopback.** My own regression, introduced in #38 while widening loopback matching. `(?:0*:)*` allows **zero** colon groups, so the pattern collapsed to `0*1` and matched hosts with no colons at all: `1`, `1:4317`, `01`, `0001` were all read as loopback. A browser reads `http://1/` as `0.0.0.1`, which is not. One character, `*` to `+`. Reproduced against the real classifier before fixing and re-checked after: the four false positives are gone and every legitimate spelling — `::1`, `[::1]:4317`, `0:0:0:0:0:0:0:1`, `[::ffff:127.0.0.1]`, `127.0.0.1`, `localhost` — still passes, with `[::2]` and `192.168.1.20` still refused. All four now in the refusal table, and reverting the character fails them.
+
+The sharper lesson is about the test table itself: #38 deliberately added near-misses (`1270.0.0.1`, `127.0.0.1.evil.example`, `[::2]`) and still missed this class, because every case I invented was *too long* rather than too short. A refusal table needs degenerate inputs, not just plausible-looking wrong ones.
+
+**#40 — two rationales in `plan.md`'s scope section were inaccurate.** Not the decision, which stands, but the reasons given for it, which would have misled whoever read them next:
+
+1. I wrote that browser control *and* operating macOS were out of scope "settled in favour of the PRD". That is true of the browser half and false of the other: the PRD specifies the agent running in the owner's real directories (line 1081, TASK_006, TASK_016), running shell commands — line 207 makes only *automatic approval* of destructive actions the non-goal, not the actions — and approvals answered from the phone (TASK_018). Deferring that goes **beyond** the PRD rather than following it. Corrected so the two halves have their real standing, which changes nothing about what gets built.
+2. The #28 deferral said the deny "costs nothing today". True of `--disallowedTools mcp__*` alone, and silently true of something larger: the shipped posture is that deny **plus** `--restricted`, and `research.md` records that `--restricted` also removes `Bash`. So the posture forecloses running any command, which is the capability TASK_016 and TASK_018 are built around. Split into two bullets — the deny is decided, the `Bash` question is not — plus two facts worth not rediscovering: TASK_018 has nothing to approve until the tool posture changes, and `$DATA_DIR/workspace` is a fixed scratch directory, not a "configured root" in the PRD's sense.
+
+**Issue list closed out.** #37 was two-part: part 1 (IPv6 forms) landed in #38, part 2 (the `x-forwarded-proto` trust boundary) is deferred to TASK_023 and now has its own issue, so #37 could close rather than lingering half-done. #27 and #6 were closed earlier — #6 because its prediction did not come true, npm workspaces keeping a single root lockfile. Everything still open is deferred with its reasoning on the issue: #28, #24, #14, #15, #12 and the new `x-forwarded-proto` one.
+
+**A checkpoint now lives at the top of `plan.md`'s "Next steps"**: what works today, the exact commands to confirm and to run it, the three things that would make the product genuinely useful (pair a second device, remote access through the tunnel, shell with approvals) with the reason each is next, a table of every open issue and why it waits, and the working rules that cost real time. None of the open issues appears in that list of three, which is the point — they are hardening, and the product gaps have no issues.
+
+Evidence: `npm run validate` exits 0 with no warnings. 267 unit tests, 10 integration, 84 repository, 3 browser. Branch coverage 85.41 percent. Scans clean over 68 commits.

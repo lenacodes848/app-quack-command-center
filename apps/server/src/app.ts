@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
-import { runClaudeTurn, type ClaudeEvent, type ClaudeTurnOptions } from '@quack/adapter';
+import { runClaudeTurn } from '@quack/adapter';
 import type { AppSessionRecord, Store } from '@quack/storage';
+import { createAgentRegistry, summarize, type TurnRunner } from './agents.js';
 import {
   buildSessionCookie,
   canHoldSecureCookie,
@@ -23,12 +25,18 @@ import {
   type PairingMode,
   type RandomBytes,
 } from './auth.js';
+import { createEventHub } from './events.js';
+import { listProjects, prepareWorkspace, resolveProject, WorkspaceError } from './workspaces.js';
 
-export type TurnRunner = (options: ClaudeTurnOptions) => AsyncGenerator<ClaudeEvent>;
+export type { TurnRunner } from './agents.js';
 
 export interface AppOptions {
-  /** Directory the agent runs in. Never the dashboard's own source tree. */
-  workspaceDir: string;
+  /** The folders whose subdirectories agents may be launched in. */
+  projectRoots: readonly string[];
+  /** Where agents' git worktrees are created, under the data directory. */
+  worktreesDir: string;
+  /** How many agents may be working at once. Defaults to 4. */
+  maxAgents?: number | undefined;
   /** Built web application to serve, when it exists. */
   webDir?: string | undefined;
   /** Injected so tests can drive a fake CLI instead of spending quota. */
@@ -55,6 +63,12 @@ export interface AppOptions {
   randomBytes?: RandomBytes | undefined;
 }
 
+/** The models an agent may be launched with, besides the CLI's default. */
+export const MODEL_CHOICES = ['opus', 'sonnet', 'haiku'] as const;
+
+/** Longest agent name accepted. */
+export const NAME_LIMIT = 80;
+
 /** Largest request body accepted, so a stray request cannot exhaust memory. */
 export const MAX_BODY_BYTES = 100_000;
 
@@ -73,16 +87,6 @@ export class BodyTooLargeError extends Error {
     this.name = 'BodyTooLargeError';
   }
 }
-
-/**
- * Appended to a stored answer that the client stopped reading part-way through.
- *
- * Chosen over a schema column for now: `normalized_messages` would need a
- * migration and the UI a new state, whereas the transcript already exists to
- * record what went wrong. If interrupted turns later need rendering differently,
- * that is the point to add the column.
- */
-export const TRUNCATED_NOTE = '[The connection was lost before this answer finished.]';
 
 /** The 413 body, with the limit named so the owner can act on it. */
 function sendTooLarge(response: ServerResponse): void {
@@ -162,121 +166,66 @@ function serveStatic(webDir: string, urlPath: string, response: ServerResponse):
 }
 
 /**
- * Stream one turn to the client as newline-delimited JSON.
+ * Read a JSON object body, answering the request itself when it cannot.
  *
- * NDJSON rather than a single JSON response because the whole point is that
- * text appears while the agent is still working. Headers are flushed before
- * the first event so the browser starts reading immediately.
+ * Returns undefined once a 413 or 400 has been sent, so a caller only has to
+ * stop. An oversized body is told apart from bad JSON, because "Body must be
+ * JSON." sends the owner looking for a syntax error that is not there.
  */
-async function streamTurn(
+async function readJsonObject(
+  request: IncomingMessage,
   response: ServerResponse,
-  events: AsyncGenerator<ClaudeEvent>,
-  onSession: (sessionId: string, model: string | undefined) => void,
-  onReply: (text: string) => void,
-): Promise<void> {
-  response.writeHead(200, {
-    'content-type': 'application/x-ndjson; charset=utf-8',
-    'cache-control': 'no-store',
-    'x-accel-buffering': 'no',
-  });
-
-  // The transcript keeps one message per turn rather than one per streamed
-  // chunk, so the pieces are gathered here and written down once the turn ends.
-  const spoken: string[] = [];
-  let failure: string | undefined;
-  /** Set when the loop stopped because the client vanished, not because the turn ended. */
-  let truncated = false;
-
-  // Writing to a destroyed response emits 'error', and with no listener that
-  // surfaces as an unhandled stream error and takes the process down. There is
-  // nothing to do about it here beyond not dying: the client is gone.
-  response.on('error', () => {
-    // Deliberately empty. The loop below notices via `destroyed`.
-  });
-
-  // Read through a function rather than the property directly. TypeScript
-  // narrows `response.destroyed` to false after the first check and does not
-  // widen it again across an await, so a second direct check is reported as
-  // always-falsy dead code — when in fact the await is exactly when it changes.
-  const clientGone = (): boolean => response.destroyed;
-
+): Promise<Record<string, unknown> | undefined> {
   try {
-    for await (const event of events) {
-      if (clientGone()) {
-        truncated = true;
-        break;
-      }
-      if (event.type === 'session') onSession(event.sessionId, event.model);
-      if (event.type === 'text') spoken.push(event.text);
-      if (event.type === 'error') failure = event.message;
-      if (!response.write(`${JSON.stringify(event)}\n`)) {
-        // Waiting on 'drain' alone never settles when the socket has died, and
-        // the caller's `finally` — the one that frees the single turn slot —
-        // then never runs, so every later turn answers 409 until a restart.
-        // Racing the close and error events is what bounds this wait to the
-        // life of the connection.
-        await new Promise<void>((resolve) => {
-          const done = (): void => {
-            // All three come off, not just the one that fired. `once` removes
-            // only the handler it invoked, so leaving the others attached leaks
-            // two listeners per backpressure cycle — which Node reports as a
-            // possible memory leak once a long answer passes ten of them.
-            response.off('drain', done);
-            response.off('close', done);
-            response.off('error', done);
-            resolve();
-          };
-          response.once('drain', done);
-          response.once('close', done);
-          response.once('error', done);
-        });
-        if (clientGone()) {
-          truncated = true;
-          break;
-        }
-      }
+    const parsed: unknown = JSON.parse(await readBody(request));
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
     }
+    sendJson(response, 400, { error: 'Body must be a JSON object.' });
+    return undefined;
   } catch (thrown) {
-    const message = thrown instanceof Error ? thrown.message : 'The turn failed.';
-    failure = message;
-    response.write(`${JSON.stringify({ type: 'error', message })}\n`);
+    if (thrown instanceof BodyTooLargeError) sendTooLarge(response);
+    else sendJson(response, 400, { error: 'Body must be JSON.' });
+    return undefined;
   }
-
-  // A failed turn is still recorded. The owner asked a question; a transcript
-  // that omits what went wrong reads as though it was never asked.
-  //
-  // A turn cut short by a hangup is recorded too, but it has to say so. Stored
-  // bare, whatever streamed before the disconnect is indistinguishable from a
-  // complete short answer, so reopening the conversation shows a confident
-  // half-sentence — and the agent's own context and the transcript then disagree
-  // about what was said, because the next turn resumes by provider session id.
-  let reply = spoken.join('').trim() === '' ? (failure ?? '') : spoken.join('');
-  if (truncated) {
-    reply = reply === '' ? TRUNCATED_NOTE : `${reply}\n\n${TRUNCATED_NOTE}`;
-  }
-  if (reply !== '') onReply(reply);
-
-  response.end();
 }
+
+/** An agent name from a request, whitespace collapsed, or an error to send. */
+function readName(value: unknown): { name: string | undefined } | { error: string } {
+  if (value === undefined || value === null) return { name: undefined };
+  if (typeof value !== 'string') return { error: 'The name must be text.' };
+  const name = value.replace(/\s+/gu, ' ').trim();
+  if (name.length > NAME_LIMIT) {
+    return { error: `The name is too long. The limit is ${String(NAME_LIMIT)} characters.` };
+  }
+  return { name: name === '' ? undefined : name };
+}
+
+/** The request handler, plus a way to stop the agents it is running. */
+export type AppHandler = ((request: IncomingMessage, response: ServerResponse) => void) & {
+  /** Stop every turn, record each as interrupted, and end every event stream. */
+  shutdown: () => Promise<void>;
+};
 
 /**
  * The dashboard's HTTP surface.
  *
- * Holds which conversation is currently open, and writes every turn to the
- * store as it happens so a restart resumes rather than forgets. With no store
- * it keeps the old in-memory behaviour, where a restart loses the thread.
+ * Agents belong to the registry, not to requests: a message starts a turn and
+ * answers straight away, and everything that happens after reaches browsers
+ * through the event stream.
  */
-export function createApp(options: AppOptions) {
-  const runTurn = options.runTurn ?? runClaudeTurn;
+export function createApp(options: AppOptions): AppHandler {
   const store = options.store;
   const now = options.now ?? (() => Date.now());
   const pairing = options.pairing ?? createPairingMode({ now });
   const randomBytes = options.randomBytes;
-  /** The provider's conversation id for the open conversation. */
-  let providerSessionId: string | undefined;
-  /** Our own id for the open conversation, when there is a store. */
-  let storedSessionId: string | undefined;
-  let busy = false;
+  const hub = createEventHub();
+  const registry = createAgentRegistry({
+    store,
+    hub,
+    runTurn: options.runTurn ?? runClaudeTurn,
+    maxRunning: options.maxAgents ?? 4,
+  });
 
   /**
    * The session this request belongs to, or undefined.
@@ -304,7 +253,7 @@ export function createApp(options: AppOptions) {
     return session;
   };
 
-  return function handle(request: IncomingMessage, response: ServerResponse): void {
+  const handle = function handle(request: IncomingMessage, response: ServerResponse): void {
     void (async () => {
       const url = new URL(request.url ?? '/', 'http://localhost');
       const path = url.pathname;
@@ -451,12 +400,7 @@ export function createApp(options: AppOptions) {
       }
 
       if (path === '/api/me' && request.method === 'GET') {
-        sendJson(response, 200, {
-          paired: true,
-          device: session?.label ?? null,
-          session: providerSessionId ?? null,
-          storedSession: storedSessionId ?? null,
-        });
+        sendJson(response, 200, { paired: true, device: session?.label ?? null });
         return;
       }
 
@@ -470,8 +414,12 @@ export function createApp(options: AppOptions) {
       }
 
       if (path === '/api/logout' && request.method === 'POST') {
-        if (session !== undefined)
+        if (session !== undefined) {
           store.revokeAppSession(session.id, new Date(now()).toISOString());
+          // A revoked session must stop hearing about agents at once, not at
+          // its next reconnect.
+          hub.closeOwner(session.id);
+        }
         response.setHeader('set-cookie', [
           buildSessionCookie('', 0),
           buildSessionCookie('', 0, { name: CSRF_COOKIE, httpOnly: false }),
@@ -482,6 +430,7 @@ export function createApp(options: AppOptions) {
 
       if (path === '/api/logout-all' && request.method === 'POST') {
         store.revokeAllAppSessions(new Date(now()).toISOString());
+        hub.closeAll();
         response.setHeader('set-cookie', [
           buildSessionCookie('', 0),
           buildSessionCookie('', 0, { name: CSRF_COOKIE, httpOnly: false }),
@@ -490,151 +439,164 @@ export function createApp(options: AppOptions) {
         return;
       }
 
-      if (path === '/api/session' && request.method === 'DELETE') {
-        // Starts a new conversation. It does not delete the stored one: removing
-        // saved conversations is a destructive act the owner has to ask for.
-        providerSessionId = undefined;
-        storedSessionId = undefined;
-        sendJson(response, 200, { ok: true });
+      if (path === '/api/events' && request.method === 'GET') {
+        const last = request.headers['last-event-id'];
+        hub.subscribe(response, {
+          owner: session?.id ?? '',
+          lastEventId: typeof last === 'string' ? last : undefined,
+        });
         return;
       }
 
-      if (path === '/api/sessions' && request.method === 'GET') {
-        const sessions = store.listSessions().map((session) => ({
-          id: session.id,
-          title: session.title ?? 'Untitled conversation',
-          model: session.model ?? null,
-          createdAt: session.createdAt,
-          updatedAt: session.updatedAt,
-        }));
-        sendJson(response, 200, { sessions });
-        return;
-      }
-
-      const openMatch = /^\/api\/sessions\/([\w-]+)$/u.exec(path);
-      if (openMatch !== null && request.method === 'GET') {
-        const wanted = openMatch[1] ?? '';
-        const session = store.getSession(wanted);
-        if (session === undefined) {
-          sendJson(response, 404, { error: 'No such conversation.' });
-          return;
-        }
+      if (path === '/api/projects' && request.method === 'GET') {
         sendJson(response, 200, {
-          id: session.id,
-          title: session.title ?? 'Untitled conversation',
-          model: session.model ?? null,
-          messages: store.listMessages(session.id),
+          configured: options.projectRoots.length > 0,
+          projects: listProjects(options.projectRoots),
         });
         return;
       }
 
-      if (path === '/api/turn') {
-        if (request.method !== 'POST') {
-          sendJson(response, 405, { error: 'Use POST.' });
-          return;
-        }
-        // One turn at a time, and the slot is claimed HERE — before the body is
-        // read, not after. Reading the body is an await, and a check on one side
-        // of an await with the set on the other is a race: two requests whose
-        // bodies arrive in a second segment, which is what any slow link does,
-        // both pass the check. That admitted two `claude` processes into one
-        // workspace, interleaved their streams, and raced on both session ids
-        // and on the transcript. Every early return below therefore has to
-        // release the slot, which is what the `finally` is for.
-        if (busy) {
-          sendJson(response, 409, { error: 'A turn is already running.' });
-          return;
-        }
-        busy = true;
-
-        // If the client goes away mid-answer, stop the agent rather than leaving
-        // it to finish for nobody and spend quota doing it.
-        //
-        // This listens to the RESPONSE closing, not the request. The request
-        // stream emits 'close' as soon as its body has been read, which is the
-        // normal path — listening there aborted every turn the moment the body
-        // arrived, killing the real `claude` process immediately. The fake
-        // runners in the tests ignore the signal, so only the live product would
-        // have shown it. `writableFinished` is what distinguishes a connection
-        // that died early from a response that simply finished.
-        const aborter = new AbortController();
-        response.once('close', () => {
-          if (!response.writableFinished) aborter.abort();
+      if (path === '/api/agents' && request.method === 'GET') {
+        // The sequence is read in the same synchronous step as the list, so a
+        // client knows exactly which later events the list already reflects.
+        sendJson(response, 200, {
+          agents: store.listSessions().map(summarize),
+          seq: hub.currentSeq(),
         });
+        return;
+      }
 
+      if (path === '/api/agents' && request.method === 'POST') {
+        const body = await readJsonObject(request, response);
+        if (body === undefined) return;
+
+        const named = readName(body['name']);
+        if ('error' in named) {
+          sendJson(response, 400, { error: named.error });
+          return;
+        }
+        const model = body['model'];
+        if (
+          model !== undefined &&
+          model !== null &&
+          model !== '' &&
+          !(MODEL_CHOICES as readonly unknown[]).includes(model)
+        ) {
+          sendJson(response, 400, {
+            error: `The model must be one of ${MODEL_CHOICES.join(', ')}, or left as the default.`,
+          });
+          return;
+        }
+        const text = body['text'];
+        if (text !== undefined && typeof text !== 'string') {
+          sendJson(response, 400, { error: 'The first message must be text.' });
+          return;
+        }
+        const project = body['project'];
+        if (typeof project !== 'string') {
+          sendJson(response, 400, { error: 'Choose a project for the agent.' });
+          return;
+        }
+
+        let agentId: string;
         try {
-          let prompt: string;
-          let wantedSession: string | undefined;
-          try {
-            const parsed: unknown = JSON.parse(await readBody(request));
-            const body =
-              typeof parsed === 'object' && parsed !== null
-                ? (parsed as Record<string, unknown>)
-                : {};
-            const text = body['text'];
-            if (typeof text !== 'string' || text.trim() === '') {
-              sendJson(response, 400, {
-                error: 'Send { "text": "..." } with a non-empty message.',
-              });
-              return;
-            }
-            prompt = text;
-            if (typeof body['sessionId'] === 'string') wantedSession = body['sessionId'];
-          } catch (thrown) {
-            if (thrown instanceof BodyTooLargeError) sendTooLarge(response);
-            else sendJson(response, 400, { error: 'Body must be JSON.' });
+          const projectDir = resolveProject(options.projectRoots, project);
+          const prepared = await prepareWorkspace({
+            projectDir,
+            worktreesDir: options.worktreesDir,
+            agentId: randomUUID(),
+            name: named.name ?? text ?? '',
+          });
+          agentId = store.createSession({
+            workspaceDir: prepared.workspaceDir,
+            projectDir,
+            branch: prepared.branch,
+            title: named.name,
+            model: typeof model === 'string' && model !== '' ? model : undefined,
+          }).id;
+        } catch (thrown) {
+          if (!(thrown instanceof WorkspaceError)) throw thrown;
+          sendJson(response, 400, { error: thrown.message });
+          return;
+        }
+
+        registry.announce(agentId);
+        // The agent exists whether or not its first message could start, so a
+        // refusal comes back beside it rather than instead of it.
+        const outcome =
+          text !== undefined && text.trim() !== ''
+            ? registry.send(agentId, text)
+            : ({ ok: true } as const);
+        const created = store.getSession(agentId);
+        sendJson(response, 201, {
+          agent: created === undefined ? null : summarize(created),
+          ...(outcome.ok ? {} : { error: outcome.error }),
+        });
+        return;
+      }
+
+      const agentMatch = /^\/api\/agents\/([\w-]+)(\/messages|\/stop)?$/u.exec(path);
+      if (agentMatch !== null) {
+        const agentId = agentMatch[1] ?? '';
+        const action = agentMatch[2];
+        const agent = store.getSession(agentId);
+        if (agent === undefined) {
+          sendJson(response, 404, { error: 'No such agent.' });
+          return;
+        }
+
+        if (action === undefined && request.method === 'GET') {
+          // Transcript, the turn in progress, and the sequence both reflect, read
+          // together so a late client joins mid-turn without gaps or repeats.
+          sendJson(response, 200, {
+            agent: summarize(agent),
+            messages: store.listMessages(agentId),
+            live: registry.live(agentId),
+            seq: hub.currentSeq(),
+          });
+          return;
+        }
+
+        if (action === undefined && request.method === 'PATCH') {
+          const body = await readJsonObject(request, response);
+          if (body === undefined) return;
+          const named = readName(body['name']);
+          if ('error' in named || named.name === undefined) {
+            sendJson(response, 400, {
+              error: 'error' in named ? named.error : 'The name cannot be empty.',
+            });
             return;
           }
-
-          // Continuing a stored conversation, perhaps one from before a restart.
-          // Its provider id comes from the store rather than from memory, which is
-          // the whole point of writing it down.
-          if (wantedSession !== undefined && wantedSession !== storedSessionId) {
-            const existing = store.getSession(wantedSession);
-            if (existing === undefined) {
-              sendJson(response, 404, { error: 'No such conversation.' });
-              return;
-            }
-            storedSessionId = existing.id;
-            providerSessionId = existing.providerSessionId;
-          }
-
-          // A conversation always exists from here on: either one was named and
-          // found, or one is created now. That is what makes the write below
-          // unconditional — it used to be guarded, which only looked necessary
-          // while a store-less app was a possibility.
-          storedSessionId ??= store.createSession({ workspaceDir: options.workspaceDir }).id;
-
-          // Written before the turn runs. If the process dies mid-answer the
-          // question is still in the transcript, which is the honest record.
-          store.appendMessage(storedSessionId, { role: 'user', content: prompt });
-
-          await streamTurn(
-            response,
-            runTurn({
-              prompt,
-              cwd: options.workspaceDir,
-              sessionId: providerSessionId,
-              signal: aborter.signal,
-            }),
-            (id, model) => {
-              providerSessionId = id;
-              if (storedSessionId !== undefined) {
-                store.recordProviderSession(storedSessionId, {
-                  providerSessionId: id,
-                  model,
-                });
-              }
-            },
-            (text) => {
-              if (storedSessionId !== undefined) {
-                store.appendMessage(storedSessionId, { role: 'agent', content: text });
-              }
-            },
-          );
-        } finally {
-          busy = false;
+          store.renameSession(agentId, named.name);
+          registry.announce(agentId);
+          const renamed = store.getSession(agentId);
+          sendJson(response, 200, { agent: renamed === undefined ? null : summarize(renamed) });
+          return;
         }
+
+        if (action === '/messages' && request.method === 'POST') {
+          const body = await readJsonObject(request, response);
+          if (body === undefined) return;
+          const text = body['text'];
+          if (typeof text !== 'string' || text.trim() === '') {
+            sendJson(response, 400, {
+              error: 'Send { "text": "..." } with a non-empty message.',
+            });
+            return;
+          }
+          const outcome = registry.send(agentId, text);
+          if (outcome.ok) sendJson(response, 202, { ok: true });
+          else sendJson(response, outcome.status, { error: outcome.error });
+          return;
+        }
+
+        if (action === '/stop' && request.method === 'POST') {
+          if (registry.stop(agentId)) sendJson(response, 200, { ok: true });
+          else sendJson(response, 409, { error: 'This agent is not working.' });
+          return;
+        }
+
+        sendJson(response, 405, { error: 'Method not allowed.' });
         return;
       }
 
@@ -651,4 +613,11 @@ export function createApp(options: AppOptions) {
       else response.end();
     });
   };
+
+  return Object.assign(handle, {
+    shutdown: async () => {
+      await registry.shutdown();
+      hub.closeAll();
+    },
+  });
 }

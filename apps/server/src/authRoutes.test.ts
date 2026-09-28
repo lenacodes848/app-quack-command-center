@@ -56,6 +56,8 @@ interface Harness {
   store: Store;
   pairing: PairingMode;
   calls: ClaudeTurnOptions[];
+  /** An agent that exists, so a message has somewhere to go. */
+  agentId: string;
   /** Move the app's clock, so expiry needs no waiting. */
   advance: (ms: number) => void;
   /** The cookies a paired browser would hold. Empty until `pair()`. */
@@ -83,9 +85,17 @@ async function harness(options: { events?: ClaudeEvent[] } = {}): Promise<Harnes
   });
   const pairing = createPairingMode({ now });
   const { run, calls } = fakeRunner(options.events);
+  const agentId = store.createSession({ workspaceDir: dir, branch: 'quack/test' }).id;
 
   const server: Server = createServer(
-    createApp({ workspaceDir: dir, runTurn: run, store, pairing, now }),
+    createApp({
+      projectRoots: [],
+      worktreesDir: join(dir, 'worktrees'),
+      runTurn: run,
+      store,
+      pairing,
+      now,
+    }),
   );
   await new Promise<void>((r) => {
     server.listen(0, '127.0.0.1', r);
@@ -125,6 +135,7 @@ async function harness(options: { events?: ClaudeEvent[] } = {}): Promise<Harnes
   return {
     base,
     store,
+    agentId,
     pairing,
     calls,
     advance: (ms) => {
@@ -146,7 +157,13 @@ async function harness(options: { events?: ClaudeEvent[] } = {}): Promise<Harnes
 describe('before pairing', () => {
   test('every route that does anything refuses', async () => {
     const h = await harness();
-    for (const path of ['/api/sessions', '/api/sessions/anything', '/api/me']) {
+    for (const path of [
+      '/api/agents',
+      '/api/agents/anything',
+      '/api/projects',
+      '/api/events',
+      '/api/me',
+    ]) {
       expect((await h.call(path)).status, path).toBe(401);
     }
   });
@@ -155,7 +172,7 @@ describe('before pairing', () => {
     // The point of the whole exercise: an unauthenticated caller must not be
     // able to run anything on the owner's machine.
     const h = await harness();
-    const response = await h.call('/api/turn', {
+    const response = await h.call(`/api/agents/${h.agentId}/messages`, {
       method: 'POST',
       body: JSON.stringify({ text: 'do something' }),
       headers: { 'content-type': 'application/json' },
@@ -175,7 +192,7 @@ describe('before pairing', () => {
 
   test('security headers are set even on a refusal', async () => {
     const h = await harness();
-    const response = await h.call('/api/sessions');
+    const response = await h.call('/api/agents');
     expect(response.headers.get('content-security-policy')).toContain("script-src 'self'");
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
   });
@@ -186,7 +203,7 @@ describe('pairing', () => {
     const h = await harness();
     expect((await h.pair()).status).toBe(200);
     expect((await h.call('/api/me')).status).toBe(200);
-    expect((await h.call('/api/sessions')).status).toBe(200);
+    expect((await h.call('/api/agents')).status).toBe(200);
   });
 
   test('issues a session cookie that scripts cannot read', async () => {
@@ -293,13 +310,13 @@ describe('a paired browser', () => {
   test('can run a turn', async () => {
     const h = await harness();
     await h.pair();
-    const response = await h.call('/api/turn', {
+    const response = await h.call(`/api/agents/${h.agentId}/messages`, {
       method: 'POST',
       body: JSON.stringify({ text: 'hello' }),
       headers: { 'content-type': 'application/json' },
     });
-    expect(response.status).toBe(200);
-    await response.text();
+    // Accepted, not answered: the turn runs in the background.
+    expect(response.status).toBe(202);
     expect(h.calls).toHaveLength(1);
   });
 
@@ -307,14 +324,14 @@ describe('a paired browser', () => {
     const h = await harness();
     await h.pair();
     h.advance(SESSION_TTL_MS + 1000);
-    expect((await h.call('/api/sessions')).status).toBe(401);
+    expect((await h.call('/api/agents')).status).toBe(401);
   });
 
   test('is refused after sitting unused for longer than the idle window', async () => {
     const h = await harness();
     await h.pair();
     h.advance(IDLE_TTL_MS + 1000);
-    expect((await h.call('/api/sessions')).status).toBe(401);
+    expect((await h.call('/api/agents')).status).toBe(401);
   });
 
   test('stays paired while it keeps being used', async () => {
@@ -324,7 +341,7 @@ describe('a paired browser', () => {
     await h.pair();
     for (let i = 0; i < 4; i += 1) {
       h.advance(IDLE_TTL_MS - 60_000);
-      expect((await h.call('/api/sessions')).status).toBe(200);
+      expect((await h.call('/api/agents')).status).toBe(200);
     }
   });
 
@@ -336,7 +353,8 @@ describe('a paired browser', () => {
     // A second app over the same database is what a restart looks like.
     const server = createServer(
       createApp({
-        workspaceDir: scratch(),
+        projectRoots: [],
+        worktreesDir: scratch(),
         runTurn: fakeRunner().run,
         store: h.store,
         pairing: createPairingMode({ now: () => Date.now() }),
@@ -361,7 +379,7 @@ describe('CSRF protection', () => {
   test('a state-changing request without the token header is refused', async () => {
     const h = await harness();
     await h.pair();
-    const response = await h.call('/api/turn', {
+    const response = await h.call(`/api/agents/${h.agentId}/messages`, {
       method: 'POST',
       csrf: false,
       body: JSON.stringify({ text: 'hello' }),
@@ -374,7 +392,7 @@ describe('CSRF protection', () => {
   test('a wrong token is refused', async () => {
     const h = await harness();
     await h.pair();
-    const response = await h.call('/api/turn', {
+    const response = await h.call(`/api/agents/${h.agentId}/messages`, {
       method: 'POST',
       csrf: false,
       body: JSON.stringify({ text: 'hello' }),
@@ -388,7 +406,7 @@ describe('CSRF protection', () => {
     // layer that does not depend on the browser getting that right.
     const h = await harness();
     await h.pair();
-    const response = await fetch(`${h.base}/api/turn`, {
+    const response = await fetch(`${h.base}/api/agents/${h.agentId}/messages`, {
       method: 'POST',
       headers: {
         cookie: [...h.jar].map(([n, v]) => `${n}=${v}`).join('; '),
@@ -405,7 +423,7 @@ describe('CSRF protection', () => {
   test('reading does not need the token', async () => {
     const h = await harness();
     await h.pair();
-    expect((await h.call('/api/sessions', { csrf: false })).status).toBe(200);
+    expect((await h.call('/api/agents', { csrf: false })).status).toBe(200);
   });
 });
 

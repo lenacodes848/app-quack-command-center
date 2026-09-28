@@ -21,6 +21,8 @@ describe('loadServerEnv', () => {
       PORT: 4317,
       DATA_DIR: '/var/lib/quack',
       LOG_LEVEL: 'info',
+      QUACK_PROJECT_ROOTS: [],
+      QUACK_MAX_AGENTS: 4,
     });
   });
 
@@ -76,5 +78,45 @@ describe('loadServerEnv', () => {
       PORT: 'port-secret-value',
     });
     expect(err.message).not.toMatch(/relative-secret-value|evil-host-value|port-secret-value/);
+  });
+
+  describe('QUACK_PROJECT_ROOTS', () => {
+    test('splits on the path delimiter, as PATH does', () => {
+      expect(
+        loadServerEnv({ ...valid, QUACK_PROJECT_ROOTS: '/srv/projects:/srv/code' })
+          .QUACK_PROJECT_ROOTS,
+      ).toEqual(['/srv/projects', '/srv/code']);
+    });
+
+    test('ignores empty entries, so a trailing delimiter is harmless', () => {
+      expect(
+        loadServerEnv({ ...valid, QUACK_PROJECT_ROOTS: ':/srv/code::' }).QUACK_PROJECT_ROOTS,
+      ).toEqual(['/srv/code']);
+    });
+
+    test('refuses a relative root, which would depend on where the server started', () => {
+      const err = catchConfigError({ ...valid, QUACK_PROJECT_ROOTS: '/srv/code:projects' });
+      expect(err.problems.join('\n')).toMatch(/QUACK_PROJECT_ROOTS.*absolute.*projects/);
+    });
+
+    test('refuses the filesystem root, which would approve everything', () => {
+      const err = catchConfigError({ ...valid, QUACK_PROJECT_ROOTS: '/' });
+      expect(err.problems.join('\n')).toMatch(/QUACK_PROJECT_ROOTS/);
+    });
+  });
+
+  describe('QUACK_MAX_AGENTS', () => {
+    test('accepts a whole number from 1 to 16', () => {
+      expect(loadServerEnv({ ...valid, QUACK_MAX_AGENTS: '1' }).QUACK_MAX_AGENTS).toBe(1);
+      expect(loadServerEnv({ ...valid, QUACK_MAX_AGENTS: '16' }).QUACK_MAX_AGENTS).toBe(16);
+    });
+
+    test.each(['0', '17', '2.5', 'four'])(
+      'refuses %s with a message that names the range',
+      (value) => {
+        const err = catchConfigError({ ...valid, QUACK_MAX_AGENTS: value });
+        expect(err.problems.join('\n')).toMatch(/QUACK_MAX_AGENTS.*1 to 16/);
+      },
+    );
   });
 });

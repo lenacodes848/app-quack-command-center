@@ -57,6 +57,8 @@ describe('CLI bootstrap guard', () => {
       PORT: 45_871,
       DATA_DIR: dataDir,
       LOG_LEVEL: 'info',
+      QUACK_PROJECT_ROOTS: [],
+      QUACK_MAX_AGENTS: 4,
     });
 
     try {
@@ -94,6 +96,8 @@ describe('CLI bootstrap guard', () => {
         PORT: 45_873,
         DATA_DIR: dir,
         LOG_LEVEL: 'info',
+        QUACK_PROJECT_ROOTS: [],
+        QUACK_MAX_AGENTS: 4,
       }) as const;
 
     const first = start(env(dirA));
@@ -132,6 +136,8 @@ describe('CLI bootstrap guard', () => {
       PORT: 45_874,
       DATA_DIR: dir,
       LOG_LEVEL: 'info',
+      QUACK_PROJECT_ROOTS: [],
+      QUACK_MAX_AGENTS: 4,
     });
     await new Promise<void>((resolve) => {
       if (server.listening) resolve();

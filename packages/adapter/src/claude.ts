@@ -21,6 +21,8 @@ export interface ClaudeTurnOptions {
   prompt: string;
   /** Working directory for the session. Never the dashboard's own directory. */
   cwd: string;
+  /** Model name or alias for `--model`. Omit for the CLI's default. */
+  model?: string | undefined;
   /** Continue an existing conversation. Omit to start a new one. */
   sessionId?: string | undefined;
   /** Override the executable, which the tests use to run a fake. */
@@ -80,9 +82,22 @@ export function buildArgs(options: ClaudeTurnOptions): string[] {
     // the namespace is what actually removes them.
     args.push('--disallowedTools', DENY_ACCOUNT_CONNECTORS);
   }
+  if (options.model !== undefined) {
+    if (!MODEL_NAME.test(options.model)) {
+      throw new Error(`Refusing to pass "${options.model}" as a model name.`);
+    }
+    args.push('--model', options.model);
+  }
   if (options.sessionId !== undefined) args.push('--resume', options.sessionId);
   return args;
 }
+
+/**
+ * What a model name may look like: an alias such as `sonnet`, or an id such as
+ * `claude-opus-5-5[1m]`. A stored value is replayed on every later turn, so one
+ * that begins with a dash would be read as a flag.
+ */
+const MODEL_NAME = /^[a-z0-9][a-z0-9.\-[\]]*$/iu;
 
 /**
  * The tool pattern that removes the signed-in account's connectors.

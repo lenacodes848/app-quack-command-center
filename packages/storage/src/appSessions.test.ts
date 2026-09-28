@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterAll, describe, expect, test } from 'vitest';
-import { openStore, SCHEMA_VERSION, type Store } from './store.js';
+import { MIGRATIONS, openStore, SCHEMA_VERSION, type Store } from './store.js';
 
 const dirs: string[] = [];
 
@@ -31,29 +31,38 @@ describe('the schema', () => {
   test('has moved on to make room for application sessions', () => {
     // A bump means an existing database gets the new table by migration rather
     // than needing to be thrown away.
-    expect(SCHEMA_VERSION).toBe(2);
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(2);
     const store = openStore(scratchPath());
-    expect(store.schemaVersion()).toBe(2);
+    expect(store.schemaVersion()).toBe(SCHEMA_VERSION);
     store.close();
   });
 
   test('adds the table to a database created before it existed', () => {
-    // A real upgrade, not an approximation: make the file genuinely look like
-    // version 1 by removing the table version 2 adds, then reopen. The
-    // conversations must survive and the new table must appear.
+    // A real upgrade, not an approximation: build the file with version 1's own
+    // migration, then reopen. It used to be made by cutting version 2's table out
+    // of a current database, which stopped working once a later migration also
+    // changed an existing table. The conversations must survive and the new
+    // table must appear.
     const path = scratchPath();
-    const first = openStore(path);
-    const session = first.createSession({ workspaceDir: '/tmp/w' });
-    first.appendMessage(session.id, { role: 'user', content: 'from the old version' });
-    first.close();
-
-    const surgery = new Database(path);
-    surgery.exec('DROP TABLE app_sessions');
-    surgery.pragma('user_version = 1');
-    surgery.close();
+    const old = new Database(path);
+    old.exec(`BEGIN; ${MIGRATIONS[0] ?? ''}; PRAGMA user_version = 1; COMMIT;`);
+    old
+      .prepare(
+        `INSERT INTO agent_sessions (id, provider, workspace_dir, created_at, updated_at)
+         VALUES ('s1', 'claude-code', '/tmp/w', 't', 't')`,
+      )
+      .run();
+    old
+      .prepare(
+        `INSERT INTO normalized_messages (id, session_id, seq, role, content, created_at)
+         VALUES ('m1', 's1', 1, 'user', 'from the old version', 't')`,
+      )
+      .run();
+    old.close();
+    const session = { id: 's1' };
 
     const upgraded = openStore(path);
-    expect(upgraded.schemaVersion()).toBe(2);
+    expect(upgraded.schemaVersion()).toBe(SCHEMA_VERSION);
     expect(upgraded.listMessages(session.id).map((m) => m.content)).toEqual([
       'from the old version',
     ]);

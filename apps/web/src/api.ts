@@ -1,119 +1,4 @@
-/**
- * Events the server streams for one turn.
- *
- * Structurally the adapter's `ClaudeEvent`. Declared again here rather than
- * imported so the browser bundle does not pull in a Node package for the sake
- * of a type; the server's tests pin the wire shape.
- */
-export type TurnEvent =
-  | { type: 'session'; sessionId: string; model?: string }
-  | { type: 'text'; text: string }
-  | { type: 'tool'; name: string }
-  | { type: 'result'; text: string; isError: boolean }
-  | { type: 'error'; message: string };
-
-/**
- * Split a stream of text chunks into whole lines.
- *
- * A chunk boundary can land mid-line, so a partial line is held back until the
- * rest arrives. Dropping that buffer is the classic way a streaming client
- * silently loses the last message of a turn.
- */
-export async function* toLines(chunks: AsyncIterable<string>): AsyncGenerator<string> {
-  let buffer = '';
-  for await (const chunk of chunks) {
-    buffer += chunk;
-    let newline = buffer.indexOf('\n');
-    while (newline !== -1) {
-      yield buffer.slice(0, newline);
-      buffer = buffer.slice(newline + 1);
-      newline = buffer.indexOf('\n');
-    }
-  }
-  if (buffer.trim() !== '') yield buffer;
-}
-
-/** Parse one NDJSON line, ignoring anything that is not a usable event. */
-export function parseTurnEvent(line: string): TurnEvent | undefined {
-  const trimmed = line.trim();
-  if (trimmed === '') return undefined;
-  try {
-    const parsed: unknown = JSON.parse(trimmed);
-    if (typeof parsed !== 'object' || parsed === null) return undefined;
-    const type = (parsed as { type?: unknown }).type;
-    if (typeof type !== 'string') return undefined;
-    return parsed as TurnEvent;
-  } catch {
-    return undefined;
-  }
-}
-
-async function* decode(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      yield decoder.decode(value, { stream: true });
-    }
-    const tail = decoder.decode();
-    if (tail !== '') yield tail;
-  } finally {
-    reader.releaseLock();
-  }
-}
-
-/** A saved conversation, as the sidebar shows it. */
-export interface SavedSession {
-  id: string;
-  title: string;
-  model: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** A stored message, as the transcript replays it. */
-export interface SavedMessage {
-  role: 'user' | 'agent';
-  content: string;
-  seq: number;
-}
-
-export interface OpenedSession {
-  id: string;
-  title: string;
-  messages: SavedMessage[];
-}
-
-/**
- * The saved conversations, newest first.
- *
- * A failure reads as an empty list rather than throwing: the sidebar is a
- * convenience, and it must not be able to take the conversation on screen down
- * with it.
- */
-export async function listSessions(): Promise<SavedSession[]> {
-  try {
-    const response = await fetch('/api/sessions');
-    if (!response.ok) return [];
-    const parsed = (await response.json()) as { sessions?: SavedSession[] };
-    return parsed.sessions ?? [];
-  } catch {
-    return [];
-  }
-}
-
-/** One saved conversation with its messages, or undefined if it is gone. */
-export async function openSession(id: string): Promise<OpenedSession | undefined> {
-  try {
-    const response = await fetch(`/api/sessions/${encodeURIComponent(id)}`);
-    if (!response.ok) return undefined;
-    return (await response.json()) as OpenedSession;
-  } catch {
-    return undefined;
-  }
-}
+import type { AgentSummary, StoredMessage, TurnEvent } from './agentState.js';
 
 /**
  * The CSRF token the server issued, read from its cookie.
@@ -210,20 +95,6 @@ export async function whoAmI(): Promise<Me | undefined> {
   }
 }
 
-/**
- * Start a new conversation.
- *
- * Goes through here rather than a bare `fetch` so it carries the CSRF token;
- * without it the server refuses the request, which is how this was found.
- */
-export async function startNewSession(): Promise<void> {
-  const token = csrfToken();
-  await fetch('/api/session', {
-    method: 'DELETE',
-    headers: token === undefined ? {} : { 'x-csrf-token': token },
-  });
-}
-
 /** Log out. `everywhere` also ends sessions on devices you no longer have. */
 export async function logout(everywhere = false): Promise<void> {
   const token = csrfToken();
@@ -233,51 +104,163 @@ export async function logout(everywhere = false): Promise<void> {
   }).catch(() => undefined);
 }
 
-export interface SendTurnOptions {
-  /** The stored conversation to continue. Omit to start a new one. */
-  sessionId?: string | undefined;
-  signal?: AbortSignal | undefined;
-  /** Overrides the token read from the cookie. For tests. */
-  csrf?: string | undefined;
+/** The server's explanation of a refusal, or a fallback naming the status. */
+async function errorFrom(response: Response): Promise<string> {
+  const fallback = `The server returned ${String(response.status)}.`;
+  try {
+    const body: unknown = await response.json();
+    if (typeof body === 'object' && body !== null && 'error' in body) {
+      return String(body.error);
+    }
+    return fallback;
+  } catch {
+    return fallback;
+  }
 }
 
-/** Send a message and stream the turn's events as they arrive. */
-export async function* sendTurn(
-  text: string,
-  options: SendTurnOptions = {},
-): AsyncGenerator<TurnEvent> {
-  const token = options.csrf ?? csrfToken();
-  const response = await fetch('/api/turn', {
-    method: 'POST',
+/**
+ * A state-changing request, carrying the CSRF token.
+ *
+ * Every POST and PATCH goes through here: without the header the server refuses
+ * the request, which is the layer that does not depend on the browser
+ * honouring SameSite.
+ */
+async function mutate(
+  url: string,
+  method: 'POST' | 'PATCH',
+  body: unknown,
+  csrf: string | undefined = csrfToken(),
+): Promise<Response> {
+  return fetch(url, {
+    method,
     headers: {
       'content-type': 'application/json',
-      // Without this the server refuses the request: it is the layer that does
-      // not depend on the browser honouring SameSite.
-      ...(token === undefined ? {} : { 'x-csrf-token': token }),
+      ...(csrf === undefined ? {} : { 'x-csrf-token': csrf }),
     },
-    body: JSON.stringify(
-      options.sessionId === undefined ? { text } : { text, sessionId: options.sessionId },
-    ),
-    signal: options.signal ?? null,
+    body: JSON.stringify(body),
   });
+}
 
-  if (!response.ok || response.body === null) {
-    const detail = await response.text().catch(() => '');
-    let message = `The server returned ${String(response.status)}.`;
-    try {
-      const parsed: unknown = JSON.parse(detail);
-      if (typeof parsed === 'object' && parsed !== null && 'error' in parsed) {
-        message = String(parsed.error);
-      }
-    } catch {
-      // Keep the status-code message.
-    }
-    yield { type: 'error', message };
-    return;
+/** A folder an agent may be launched in. */
+export interface Project {
+  name: string;
+  path: string;
+  git: boolean;
+}
+
+export interface ProjectList {
+  /** False when the server has no project roots, which the launch form explains. */
+  configured: boolean;
+  projects: Project[];
+}
+
+/** The folders agents may be launched in, or undefined when they could not be read. */
+export async function listProjects(): Promise<ProjectList | undefined> {
+  try {
+    const response = await fetch('/api/projects');
+    return response.ok ? ((await response.json()) as ProjectList) : undefined;
+  } catch {
+    return undefined;
   }
+}
 
-  for await (const line of toLines(decode(response.body))) {
-    const event = parseTurnEvent(line);
-    if (event !== undefined) yield event;
+/** Every agent, with the stream sequence the list reflects. */
+export async function listAgents(): Promise<{ agents: AgentSummary[]; seq: number } | undefined> {
+  try {
+    const response = await fetch('/api/agents');
+    if (!response.ok) return undefined;
+    return (await response.json()) as { agents: AgentSummary[]; seq: number };
+  } catch {
+    return undefined;
+  }
+}
+
+export interface OpenedAgent {
+  agent: AgentSummary;
+  messages: StoredMessage[];
+  /** The events of the turn in progress, if one is. */
+  live: TurnEvent[];
+  seq: number;
+}
+
+/** One agent with its transcript, or undefined if it is gone. */
+export async function openAgent(id: string): Promise<OpenedAgent | undefined> {
+  try {
+    const response = await fetch(`/api/agents/${encodeURIComponent(id)}`);
+    return response.ok ? ((await response.json()) as OpenedAgent) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export interface LaunchInput {
+  name: string;
+  project: string;
+  /** An alias, or empty for the CLI's default. */
+  model: string;
+  /** The first message. May be empty, to launch an agent without starting it. */
+  text: string;
+}
+
+/**
+ * Launch an agent.
+ *
+ * The agent can exist with an error beside it: its first message may be
+ * refused, for instance at the limit on working agents, after it was created.
+ */
+export async function launchAgent(
+  input: LaunchInput,
+  csrf?: string,
+): Promise<{ agent?: AgentSummary; error?: string }> {
+  try {
+    const response = await mutate('/api/agents', 'POST', input, csrf);
+    if (!response.ok) return { error: await errorFrom(response) };
+    const body = (await response.json()) as { agent: AgentSummary; error?: string };
+    return body.error === undefined ? { agent: body.agent } : body;
+  } catch {
+    return { error: 'Could not reach the server. Is it still running?' };
+  }
+}
+
+/** Send a message. Undefined on success, or the reason it was refused. */
+export async function sendMessage(
+  id: string,
+  text: string,
+  csrf?: string,
+): Promise<string | undefined> {
+  try {
+    const response = await mutate(
+      `/api/agents/${encodeURIComponent(id)}/messages`,
+      'POST',
+      { text },
+      csrf,
+    );
+    return response.ok ? undefined : await errorFrom(response);
+  } catch {
+    return 'Could not reach the server. Is it still running?';
+  }
+}
+
+/** Stop an agent's turn. Undefined on success, or the reason it could not. */
+export async function stopAgent(id: string, csrf?: string): Promise<string | undefined> {
+  try {
+    const response = await mutate(`/api/agents/${encodeURIComponent(id)}/stop`, 'POST', {}, csrf);
+    return response.ok ? undefined : await errorFrom(response);
+  } catch {
+    return 'Could not reach the server. Is it still running?';
+  }
+}
+
+/** Rename an agent. Undefined on success, or the reason it was refused. */
+export async function renameAgent(
+  id: string,
+  name: string,
+  csrf?: string,
+): Promise<string | undefined> {
+  try {
+    const response = await mutate(`/api/agents/${encodeURIComponent(id)}`, 'PATCH', { name }, csrf);
+    return response.ok ? undefined : await errorFrom(response);
+  } catch {
+    return 'Could not reach the server. Is it still running?';
   }
 }

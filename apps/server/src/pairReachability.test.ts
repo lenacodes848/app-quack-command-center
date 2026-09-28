@@ -161,7 +161,8 @@ describe('pairing from an address that cannot hold the cookie', () => {
     // phone bounces back to the login screen — with the code already spent.
     const server = await startPaired({
       dataDir: scratch(),
-      workspaceDir: scratch(),
+      projectRoots: [],
+      worktreesDir: scratch(),
       paired: false,
     });
     cleanups.push(server.close);
@@ -184,7 +185,8 @@ describe('pairing from an address that cannot hold the cookie', () => {
     // the worst outcome: the obvious retry fails too, and pairing looks broken.
     const server = await startPaired({
       dataDir: scratch(),
-      workspaceDir: scratch(),
+      projectRoots: [],
+      worktreesDir: scratch(),
       paired: false,
     });
     cleanups.push(server.close);
@@ -207,7 +209,8 @@ describe('pairing from an address that cannot hold the cookie', () => {
     // way, and a caller on loopback still gets the ordinary failure.
     const server = await startPaired({
       dataDir: scratch(),
-      workspaceDir: scratch(),
+      projectRoots: [],
+      worktreesDir: scratch(),
       paired: false,
     });
     cleanups.push(server.close);
@@ -224,7 +227,8 @@ describe('pairing from an address that cannot hold the cookie', () => {
   test('pairing still works normally over loopback', async () => {
     const server = await startPaired({
       dataDir: scratch(),
-      workspaceDir: scratch(),
+      projectRoots: [],
+      worktreesDir: scratch(),
     });
     cleanups.push(server.close);
     expect((await server.call('/api/me')).status).toBe(200);
@@ -241,7 +245,8 @@ describe('pairing must prove where it came from', () => {
     // guesses at the loopback port and burn the pairing window.
     const server = await startPaired({
       dataDir: scratch(),
-      workspaceDir: scratch(),
+      projectRoots: [],
+      worktreesDir: scratch(),
       paired: false,
     });
     cleanups.push(server.close);
@@ -263,7 +268,8 @@ describe('pairing must prove where it came from', () => {
     // is not a browser; refuse rather than assume.
     const server = await startPaired({
       dataDir: scratch(),
-      workspaceDir: scratch(),
+      projectRoots: [],
+      worktreesDir: scratch(),
       paired: false,
     });
     cleanups.push(server.close);
@@ -279,7 +285,8 @@ describe('pairing must prove where it came from', () => {
   test('the ordinary same-origin POST from the pairing screen still works', async () => {
     const server = await startPaired({
       dataDir: scratch(),
-      workspaceDir: scratch(),
+      projectRoots: [],
+      worktreesDir: scratch(),
       paired: false,
     });
     cleanups.push(server.close);
@@ -299,7 +306,8 @@ describe('pairing must prove where it came from', () => {
     // whether its address could have held a cookie either.
     const server = await startPaired({
       dataDir: scratch(),
-      workspaceDir: scratch(),
+      projectRoots: [],
+      worktreesDir: scratch(),
       paired: false,
     });
     cleanups.push(server.close);

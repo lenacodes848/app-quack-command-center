@@ -39,6 +39,28 @@ What follows, so the reasoning is not lost:
 
 ## Next steps (resume here)
 
+### Product phases — decided 2026-09-28
+
+The owner uses agents both ways: watching several live, and starting them then checking back later, often from the phone. Agents work in the owner's **real project folders**, each in its **own git worktree**. Order, each phase its own branch and PR:
+
+1. **Parallel background agents** (in progress, branch `feat/parallel-agents`, design below).
+2. **Shell with approvals.** Starts with a live spike of `--permission-prompts host` with `--input-format stream-json`, which `research.md` records as unverified. Swaps the per-turn runner for a long-lived one behind the same interface.
+3. **Device management:** pair-another-device button, paired-device list, per-device revocation.
+4. **Phone access:** Cloudflare Tunnel plus Access. Owner gate on the public hostname. #41 is fixed here.
+5. **Tool grants:** named MCP allowlist per agent (#28).
+
+### Phase 1 design: parallel background agents
+
+The owner approved approach A and these defaults on 2026-09-28: the server owns agents; runs are decoupled from HTTP.
+
+- **Agents are the existing `agent_sessions` rows.** Migration 3 adds `project_dir`, `branch` and `run_state` (`idle`, `running`, `failed`, `stopped`, `interrupted`). The name is `title`. The requested model goes in `model`, and the provider's `system/init` value overwrites it (the effective value, per PRD 1.5). Legacy conversations have no project and keep their scratch `workspace_dir`, so they still resume.
+- **Registry (`apps/server/src/agents.ts`).** It runs one turn per agent at a time, as a per-turn `claude --print --resume` process like today, but started in the background: the send request answers 202 and never holds the turn. It refuses a turn when the agent is already running, when `QUACK_MAX_AGENTS` agents are running (default 4, refused rather than queued), or when a non-git folder already has an agent running in it. Stop aborts the process and records `[Stopped.]`. At startup, any `running` row becomes `interrupted` with a note. A graceful shutdown stores the partial answer with the same note.
+- **Events (`apps/server/src/events.ts`).** One SSE stream, `GET /api/events`, for every agent. Every event has a global sequence number. A ring buffer replays from `Last-Event-ID` on reconnect, and a client too far behind gets `resync`. `GET /api/agents/:id` returns the stored transcript, the in-progress turn's events and the sequence they run up to, so a late tab joins mid-turn without gaps or duplicates. Logout closes that session's streams, and logout-all closes every stream.
+- **Projects (`apps/server/src/workspaces.ts`).** `QUACK_PROJECT_ROOTS` holds absolute directories separated by `:`, set in configuration only (PRD line 1081). The projects are the directories directly under each root. A launch path is re-validated on the server: `realpath` must be inside a root and must be a directory. A git project gets `git worktree add -b quack/<slug>-<id> $DATA_DIR/worktrees/<agentId> HEAD`, run through `execFile` with no shell. Nothing ever deletes a worktree or branch automatically; removal is an owner gate.
+- **Model:** `opus`, `sonnet`, `haiku` or the CLI default, checked against an allowlist and passed as `--model`.
+- **Routes:** these replace `/api/turn`, `/api/session` and `/api/sessions*`: `GET /api/projects`, `GET|POST /api/agents`, `GET|PATCH /api/agents/:id`, `POST /api/agents/:id/messages`, `POST /api/agents/:id/stop`, `GET /api/events`.
+- **Web:** agent list with live status, a launch form (name, project, model, first message), an agent view with rename and Stop, and opt-in browser notifications when an agent finishes or fails. On a phone, the list and the agent view are separate screens.
+
 ### Checkpoint — 2026-09-26
 
 **Where this is.** Everything below is merged to `main` and working: an adapter that drives Claude Code, persistence, device-pairing authentication, and a browser UI. `npm run validate` exits 0 with no warnings and the scans are clean. The exact test counts and coverage live in the last `progress.md` entry, which is dated; they are deliberately not repeated here, because a copy in this checkpoint goes stale on the next merge (#45).

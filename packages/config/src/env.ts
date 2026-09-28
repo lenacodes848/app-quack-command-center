@@ -1,4 +1,4 @@
-import { isAbsolute } from 'node:path';
+import { delimiter, isAbsolute, resolve } from 'node:path';
 import { z } from 'zod';
 
 export class ConfigError extends Error {
@@ -43,6 +43,35 @@ const schema = z.object({
       error: 'LOG_LEVEL must be fatal, error, warn, info, debug or trace.',
     })
     .default('info'),
+  // The folders whose subdirectories agents may be launched in. Set here and
+  // nowhere else: no route edits them, because a browser that could choose the
+  // roots could choose the whole disk (PRD line 1081).
+  QUACK_PROJECT_ROOTS: z
+    .string()
+    .default('')
+    .transform((v) => v.split(delimiter).filter((entry) => entry !== ''))
+    .superRefine((roots, context) => {
+      for (const root of roots) {
+        if (!isAbsolute(root)) {
+          context.addIssue({
+            code: 'custom',
+            message: `QUACK_PROJECT_ROOTS entries must be absolute paths; "${root}" is not.`,
+          });
+        } else if (resolve(root) === resolve('/')) {
+          context.addIssue({
+            code: 'custom',
+            message: 'QUACK_PROJECT_ROOTS must not include the filesystem root.',
+          });
+        }
+      }
+    }),
+  QUACK_MAX_AGENTS: z
+    .string()
+    .default('4')
+    .transform((v) => Number(v))
+    .refine((n) => Number.isInteger(n) && n >= 1 && n <= 16, {
+      error: 'QUACK_MAX_AGENTS must be a whole number from 1 to 16.',
+    }),
 });
 
 export type ServerEnv = z.infer<typeof schema>;

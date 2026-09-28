@@ -50,6 +50,24 @@ describe('buildArgs', () => {
     expect(args).not.toContain('--resume');
   });
 
+  test('no model flag unless one was chosen, so the CLI default applies', () => {
+    expect(buildArgs({ prompt: 'hi', cwd: '/tmp' })).not.toContain('--model');
+  });
+
+  test('a chosen model is passed as its own argument', () => {
+    const args = buildArgs({ prompt: 'hi', cwd: '/tmp', model: 'sonnet', sessionId: 'abc' });
+    expect(args[args.indexOf('--model') + 1]).toBe('sonnet');
+    // Resume stays last, where the existing contract expects it.
+    expect(args.slice(-2)).toEqual(['--resume', 'abc']);
+  });
+
+  test('a model that looks like a flag is refused rather than passed', () => {
+    // The value is stored and comes back from the provider, so it is not
+    // trusted: `--model --dangerously-skip-permissions` would be a flag.
+    expect(() => buildArgs({ prompt: 'hi', cwd: '/tmp', model: '--help' })).toThrow(/model/i);
+    expect(() => buildArgs({ prompt: 'hi', cwd: '/tmp', model: 'opus sonnet' })).toThrow(/model/i);
+  });
+
   test('an existing conversation resumes by session id', () => {
     const args = buildArgs({ prompt: 'again', cwd: '/tmp', sessionId: 'abc-123' });
     expect(args.slice(-2)).toEqual(['--resume', 'abc-123']);

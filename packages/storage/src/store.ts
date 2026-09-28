@@ -9,7 +9,7 @@ import Database from 'better-sqlite3';
  * Kept in SQLite's own `user_version` rather than a table of our own, so the
  * version travels with the file and cannot disagree with it.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * Ordered migrations. Index 0 takes an empty database to version 1.
@@ -22,7 +22,7 @@ export const SCHEMA_VERSION = 2;
  * though only two of its eleven records exist yet, so the rest can be added
  * without renaming what conversations are already stored in.
  */
-const MIGRATIONS: readonly string[] = [
+export const MIGRATIONS: readonly string[] = [
   `
   CREATE TABLE agent_sessions (
     id                  TEXT PRIMARY KEY,
@@ -66,7 +66,21 @@ const MIGRATIONS: readonly string[] = [
 
   CREATE INDEX app_sessions_by_token ON app_sessions (token_hash);
   `,
+
+  // Version 3: agents. A conversation becomes an agent by gaining the project it
+  // was launched in, the branch of its worktree, and whether a turn is running.
+  // All three are nullable or defaulted, so conversations from before this
+  // version stay valid rows: no project, no branch, idle.
+  `
+  ALTER TABLE agent_sessions ADD COLUMN project_dir TEXT;
+  ALTER TABLE agent_sessions ADD COLUMN branch TEXT;
+  ALTER TABLE agent_sessions ADD COLUMN run_state TEXT NOT NULL DEFAULT 'idle'
+    CHECK (run_state IN ('idle', 'running', 'failed', 'stopped', 'interrupted'));
+  `,
 ];
+
+/** Whether an agent has a turn in flight, and how the last one ended. */
+export type RunState = 'idle' | 'running' | 'failed' | 'stopped' | 'interrupted';
 
 /** One stored conversation. */
 export interface SessionRecord {
@@ -75,8 +89,13 @@ export interface SessionRecord {
   /** The provider's own conversation id, which `--resume` needs. */
   providerSessionId: string | undefined;
   workspaceDir: string;
+  /** The approved project folder it was launched in. Absent for older conversations. */
+  projectDir: string | undefined;
+  /** The worktree's branch, when the project is a git repository. */
+  branch: string | undefined;
   title: string | undefined;
   model: string | undefined;
+  runState: RunState;
   createdAt: string;
   updatedAt: string;
 }
@@ -85,6 +104,10 @@ export interface CreateSessionInput {
   workspaceDir: string;
   provider?: string | undefined;
   title?: string | undefined;
+  projectDir?: string | undefined;
+  branch?: string | undefined;
+  /** The model asked for. Replaced by the one the provider reports running. */
+  model?: string | undefined;
 }
 
 interface SessionRow {
@@ -94,6 +117,9 @@ interface SessionRow {
   workspace_dir: string;
   title: string | null;
   model: string | null;
+  project_dir: string | null;
+  branch: string | null;
+  run_state: RunState;
   created_at: string;
   updated_at: string;
 }
@@ -104,8 +130,11 @@ function toSession(row: SessionRow): SessionRecord {
     provider: row.provider,
     providerSessionId: row.provider_session_id ?? undefined,
     workspaceDir: row.workspace_dir,
+    projectDir: row.project_dir ?? undefined,
+    branch: row.branch ?? undefined,
     title: row.title ?? undefined,
     model: row.model ?? undefined,
+    runState: row.run_state,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -222,6 +251,16 @@ export interface Store {
   getSession(id: string): SessionRecord | undefined;
   /** Record the provider's conversation id, which `--resume` needs after a restart. */
   recordProviderSession(id: string, input: RecordProviderSessionInput): void;
+  setRunState(id: string, state: RunState): void;
+  /** Give an agent a name of the owner's choosing. False when there is no such agent. */
+  renameSession(id: string, title: string): boolean;
+  /**
+   * Mark every agent still recorded as running as interrupted, and return them.
+   *
+   * Called once at startup: a `running` row from a previous process describes a
+   * turn nobody is running any more.
+   */
+  markInterrupted(): string[];
   appendMessage(sessionId: string, input: AppendMessageInput): MessageRecord;
   listMessages(sessionId: string): MessageRecord[];
 
@@ -285,11 +324,38 @@ export function openStore(path: string, options: OpenStoreOptions = {}): Store {
 
   migrate(db);
 
-  const insertSession = db.prepare<[string, string, string, string | null, string, string]>(
+  const insertSession = db.prepare<
+    [
+      string,
+      string,
+      string,
+      string | null,
+      string | null,
+      string | null,
+      string | null,
+      string,
+      string,
+    ]
+  >(
     `INSERT INTO agent_sessions
-       (id, provider, workspace_dir, title, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+       (id, provider, workspace_dir, title, project_dir, branch, model, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
+  const updateRunState = db.prepare<[string, string, string]>(
+    `UPDATE agent_sessions SET run_state = ?, updated_at = ? WHERE id = ?`,
+  );
+  const updateTitle = db.prepare<[string, string]>(
+    `UPDATE agent_sessions SET title = ? WHERE id = ?`,
+  );
+  const selectRunning = db.prepare(`SELECT id FROM agent_sessions WHERE run_state = 'running'`);
+  const interruptRunning = db.prepare(
+    `UPDATE agent_sessions SET run_state = 'interrupted' WHERE run_state = 'running'`,
+  );
+  const markInterrupted = db.transaction((): string[] => {
+    const ids = (selectRunning.all() as { id: string }[]).map((row) => row.id);
+    interruptRunning.run();
+    return ids;
+  });
   const selectSessions = db.prepare(
     `SELECT * FROM agent_sessions ORDER BY updated_at DESC, created_at DESC`,
   );
@@ -377,14 +443,27 @@ export function openStore(path: string, options: OpenStoreOptions = {}): Store {
       const stamp = now();
       const id = randomUUID();
       const provider = input.provider ?? 'claude-code';
-      insertSession.run(id, provider, input.workspaceDir, input.title ?? null, stamp, stamp);
+      insertSession.run(
+        id,
+        provider,
+        input.workspaceDir,
+        input.title ?? null,
+        input.projectDir ?? null,
+        input.branch ?? null,
+        input.model ?? null,
+        stamp,
+        stamp,
+      );
       return {
         id,
         provider,
         providerSessionId: undefined,
         workspaceDir: input.workspaceDir,
+        projectDir: input.projectDir,
+        branch: input.branch,
         title: input.title,
-        model: undefined,
+        model: input.model,
+        runState: 'idle',
         createdAt: stamp,
         updatedAt: stamp,
       };
@@ -400,6 +479,16 @@ export function openStore(path: string, options: OpenStoreOptions = {}): Store {
     recordProviderSession(id, input) {
       updateProviderSession.run(input.providerSessionId, input.model ?? null, now(), id);
     },
+
+    setRunState(id, state) {
+      updateRunState.run(state, now(), id);
+    },
+
+    renameSession(id, title) {
+      return updateTitle.run(title.trim(), id).changes > 0;
+    },
+
+    markInterrupted: () => markInterrupted(),
 
     appendMessage: (sessionId, input) => appendMessage(sessionId, input),
 

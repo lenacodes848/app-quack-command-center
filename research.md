@@ -181,7 +181,16 @@ Measured by running the real binary, not read from documentation. The reliable i
 - **`--disallowedTools mcp__*` is what removes them.** The same turn went from 114 tools to 21, with `Read` and `Write` intact and `Bash` absent. This is the flag the adapter relies on.
 - **A plain `spawn` leaks the parent's session.** A dashboard started from inside a Claude Code session passed the child `CLAUDECODE`, `AI_AGENT` and six `CLAUDE_CODE_` variables including the session id and the messaging token. A child holding those is a participant in a conversation it knows nothing about, and it also changes how connectors load, which confounded an earlier measurement. The adapter strips them.
 - **The posture the adapter sends** is therefore `--print <prompt> --output-format stream-json --verbose --permission-mode acceptEdits --restricted --disallowedTools mcp__*`, with restricted the default rather than an opt-in, plus `--resume <id>` on later turns. Sessions resume correctly: a second turn answered from the first turn's context in a workspace holding nothing else.
-- **Still unverified:** attachments, transcript layout on disk, and bridging a real permission prompt to a browser (`--permission-prompts host` with `--input-format stream-json`), which remains the route to per-tool approval if that is wanted later.
+- **Still unverified:** attachments, transcript layout on disk, and bridging a real permission prompt to a browser (`--permission-prompts host` with `--input-format stream-json`), which remains the route to per-tool approval if that is wanted later. Phase 2 starts with exactly this spike.
+
+### Verified for parallel agents (CLI 2.1.283, live, 2026-09-28)
+
+Run against the built server in a scratch project root holding one throwaway git repository, with `--model haiku`.
+
+- **`--model` takes an alias, and the init event reports the full id.** `haiku` came back as `claude-haiku-4-5-20251001`, which the store keeps and replays as `--model` on later turns. A second turn with `--model claude-haiku-4-5-20251001 --resume <id>` answered from the first turn's context, so pinning the model does not break resume.
+- **Two `claude` processes run side by side in two worktrees of one repository** without interfering: both answered in about 8 seconds together, and a file one agent was asked to write existed only in its own worktree, with the project's own checkout untouched on its original branch.
+- **Aborting the spawn signal stops the process.** Stop mid-answer left no `claude` process behind, and the only error the adapter saw was the abort's own, which the registry drops.
+- **Ctrl+C with a turn running** stored the turn as interrupted and left no orphaned `claude` process.
 
 ## PRD defects noted
 

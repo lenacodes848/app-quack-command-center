@@ -295,8 +295,8 @@ describe('several agents', () => {
     // A folder that is not a git repository runs agents in place, so a second
     // agent there would edit the same files as the first.
     const { store, registry } = setup();
-    const a = store.createSession({ workspaceDir: '/Users/me/notes' });
-    const b = store.createSession({ workspaceDir: '/Users/me/notes' });
+    const a = store.createSession({ workspaceDir: '/srv/projects/notes' });
+    const b = store.createSession({ workspaceDir: '/srv/projects/notes' });
 
     registry.send(a.id, 'x');
     const refused = registry.send(b.id, 'x');

@@ -31,7 +31,7 @@ If you have never used this before, read [Before you start](#before-you-start) a
 
 Claude Code normally runs in a terminal. That is fine at a desk, and awkward everywhere else: you cannot easily glance at it from your phone, a closed terminal loses the thread, and there is no list of what you were working on last week.
 
-Quack Command Center puts a web page in front of it. The page runs from a small server on your own machine. When you send a message, that server starts Claude Code, streams the reply back to your browser word by word, and writes both sides of the conversation to a database file next to it.
+Quack Command Center puts a web page in front of it, and lets you run several Claude Code agents at once. The page runs from a small server on your own machine. You launch an agent in one of your projects, give it a task, and it works in the background: close the tab, launch another, come back later. Each reply streams to any open browser as it is written, and both sides of every conversation are saved to a database file next to the server.
 
 Three things are worth understanding before anything else:
 
@@ -47,18 +47,21 @@ Being straight about this up front saves you from hunting for buttons that do no
 
 **It can:**
 
-- Hold a conversation with Claude Code in a browser, with replies streaming in as they are generated.
-- Show you which tools the agent used (a small chip labelled `Read`, `Write`, and so on).
-- Ask you to pair the browser before it will do anything, so reaching the port is not the same as controlling the agent.
-- Save every conversation to disk, so restarting the server loses nothing.
-- List your past conversations in a sidebar; click one to reopen it and carry on. The agent still remembers the earlier context, because it resumes the same underlying session.
-- Let the agent read and write files inside its own workspace directory.
+- Run several Claude Code agents at the same time, each in one of your projects, with a live list showing which are working, finished, failed or stopped.
+- Give each agent in a git repository its **own worktree on its own branch** (`quack/<name>-<id>`), so agents working on the same project never edit the same files. Your own checkout is not touched.
+- Keep an agent working when you close the tab. Open it again from any paired browser and you see the reply so far, still streaming.
+- Launch an agent with a name, a model (Opus, Sonnet, Haiku or the default) and a first message; rename it later.
+- Stop an agent mid-answer without losing the conversation.
+- Notify you, if you allow it, when an agent finishes or fails while you are looking at something else.
+- Show which tools an agent used (a small chip labelled `Read`, `Write`, and so on).
+- Ask you to pair the browser before it will do anything, so reaching the port is not the same as controlling the agents.
+- Save every conversation to disk, so restarting the server loses nothing. A turn the server was in the middle of is marked *interrupted*; send another message to carry on, and the agent still remembers the earlier context.
 
 **It cannot yet:**
 
 - **Ask you for permission to run a shell command.** The agent has no shell at all right now. See [What the agent is allowed to do](#what-the-agent-is-allowed-to-do).
 - **Be reached from another computer.** The server only ever listens on loopback, on purpose. Remote access is meant to arrive later as an authenticated tunnel, not by opening a port.
-- Handle attachments, run more than one conversation at a time, rename or delete saved conversations, or search across them.
+- Handle attachments, delete agents or their worktrees, or search across conversations.
 
 ---
 
@@ -71,8 +74,8 @@ Four pieces, each doing one job:
   ┌──────────────┐        ┌──────────────────────────────────┐
   │              │        │                                  │
   │  apps/web    │◄──────►│  apps/server                     │
-  │  chat UI +   │  HTTP  │  routes, streaming, one session   │
-  │  sidebar     │        │                                  │
+  │  agent list, │ HTTP + │  routes, agent registry,         │
+  │  agent view  │  SSE   │  event stream, worktrees         │
   └──────────────┘        │        │                │         │
                           │        ▼                ▼         │
                           │  packages/adapter  packages/      │
@@ -83,8 +86,8 @@ Four pieces, each doing one job:
                           └──────────────────────────────────┘
 ```
 
-- **`apps/web`** is the page you look at: a message list, a box to type in, and a sidebar of saved conversations.
-- **`apps/server`** answers the browser, streams a reply back as it arrives, and writes each turn to the database.
+- **`apps/web`** is the page you look at: the list of agents, a form to launch one, and the conversation with whichever you open.
+- **`apps/server`** runs the agents. A message starts a turn and the request returns at once; the turn carries on in the server, and everything it does reaches every open browser through one event stream. It also creates each agent's git worktree.
 - **`packages/adapter`** starts the real `claude` command, reads its output, and turns it into a tidy list of events (*a session started*, *some text*, *a tool ran*, *the turn finished*).
 - **`packages/storage`** is the SQLite database holding your conversations.
 
@@ -208,18 +211,20 @@ mkdir -p ~/quack-data
 From the project directory, in a terminal where you have run `nvm use`:
 
 ```bash
-DATA_DIR=~/quack-data node apps/server/dist/index.js
+QUACK_PROJECT_ROOTS=~/Projects DATA_DIR=~/quack-data node apps/server/dist/index.js
 ```
+
+`QUACK_PROJECT_ROOTS` is the folder that holds your projects. Every folder directly inside it can be picked when you launch an agent. Several roots are separated by `:`, the way `PATH` is.
 
 You should see exactly three lines, with your own home directory expanded in place of `~`:
 
 ```
 Quack Command Center on http://127.0.0.1:4317
-Agent workspace: ~/quack-data/workspace
+Project folders: ~/Projects
 Conversations: ~/quack-data/quack.db
 ```
 
-Those three lines tell you the address to open, the folder the agent works in, and the file your conversations are saved to.
+Those three lines tell you the address to open, where agents may work, and the file your conversations are saved to. Without `QUACK_PROJECT_ROOTS` the middle line says none are configured, and the launch form explains how to set it.
 
 On a **first** start there will be two more lines, because no browser is paired yet:
 
@@ -266,11 +271,11 @@ QUACK_PAIR=1 DATA_DIR=~/quack-data node apps/server/dist/index.js
 
 ### What you should see once paired
 
-A header with a duck, an empty conversation area, and a message box at the bottom. If you have used it before, the sidebar on the left lists your past conversations.
+A header with a duck, and the list of agents on the left with a **New agent** button. On a phone the list fills the screen, and opening an agent switches to it.
 
 ### Stop it
 
-Press **Ctrl+C** in the terminal. Nothing is lost: each turn is written to the database as it happens, not when you shut down.
+Press **Ctrl+C** in the terminal. Any agent in the middle of an answer is stopped, what it had said so far is saved with a note that the server stopped, and it is marked *interrupted*. Send it another message after you restart to carry on.
 
 ### Leave it running in the background
 
@@ -288,31 +293,32 @@ lsof -ti tcp:4317 | xargs kill
 
 ## Using it
 
-### Your first message
+### Launching an agent
 
-1. Click the message box at the bottom (it says *Message Claude Code*).
-2. Type something. Try: `What files are in the current directory?`
-3. Press **Enter** to send. (**Shift+Enter** makes a new line instead.)
+1. Click **New agent**.
+2. Pick a **project**. The form says whether it is a git repository: if so the agent gets its own worktree and branch; if not, it works in the folder itself and only one agent can work there at a time.
+3. Optionally give it a **name** (used in the list and for the branch), a **model**, and a **first message**. Try: `What does this project do? Read the README and summarise it.`
+4. Click **Launch**. The agent appears at the top of the list, marked **Working**.
 
-You will see your message appear under **you**, then an **agent** block showing `thinking…`, then the reply arriving a few words at a time.
+### While it works
 
-### Reading a reply
+- **You can leave.** Open another agent, launch a new one, or close the tab. The agent carries on. Up to four work at once by default (`QUACK_MAX_AGENTS`); past that, a new message is refused with a message naming the limit.
+- **Streaming text** — open the agent to watch the reply arrive. Open it on another device and you see the same reply, from where it has got to.
+- **Tool chips** — small grey labels like `Read` or `Write`. If you asked for a file and see no `Write` chip, no file was written.
+- **Stop** — top right of a working agent. The conversation is kept, marked `[Stopped.]`.
+- **Red text** — something failed. The message is the error itself, and the agent is marked **Failed** in the list.
 
-- **Streaming text** — the reply appears progressively, as the agent produces it. You are watching it work, not waiting for a finished answer.
-- **Tool chips** — small grey labels above a reply, like `Read` or `Write`. They tell you the agent did something rather than only talked. If you asked it to create a file and see no `Write` chip, it did not create the file.
-- **Red text** — something failed. The message is the error itself, not a generic apology.
+### Notifications
 
-### Starting a fresh conversation
+Click **Turn on notifications** once and allow it. After that, when an agent finishes or fails and you are not looking at it, your browser tells you. This works while the dashboard is open in some tab; closed entirely, it cannot.
 
-Click **New session**, top right. This begins a new thread with no memory of the previous one. It does **not** delete the old conversation — that stays in the sidebar.
+### Where the work ends up
 
-### Going back to an earlier conversation
+An agent in a git repository works on its own branch, in a worktree under `DATA_DIR/worktrees/`. Its changes are not in your checkout until you merge them: `git merge quack/fix-login-a1b2c3` from your project, for example. The branch name is shown at the top of the agent. Nothing ever deletes a worktree or branch for you; remove one with `git worktree remove <path>` when you are done with it.
 
-Click any entry in the left sidebar. The transcript reloads, and the entry highlights to show which one you are in. Anything you send now continues *that* conversation, and the agent still has its earlier context — it resumes the same underlying session rather than starting over.
+### Renaming
 
-Conversations are named automatically from your first message and ordered with the most recently active at the top.
-
-> **The sidebar is hidden on narrow screens.** It appears at roughly tablet width and up. On a phone you can still hold a conversation, but not yet switch between saved ones — a gap that matters given the whole point is to use this from a phone, and one that will close when remote access is built.
+Click the agent's name at the top of its view.
 
 ### Logging out
 
@@ -325,7 +331,7 @@ Neither deletes anything. Your conversations stay exactly where they were.
 
 ### The one rule worth remembering
 
-**One turn at a time.** If you send a message while another is still running, the server answers `409` and refuses. Wait for the reply.
+**One turn per agent.** A working agent refuses another message until it finishes or you stop it. Other agents are unaffected.
 
 ---
 
@@ -335,7 +341,9 @@ Set these as environment variables when starting the server. Only `DATA_DIR` is 
 
 | Variable | Default | What it does |
 |---|---|---|
-| `DATA_DIR` | *(required)* | Absolute path to the folder holding the database and the agent's workspace. |
+| `DATA_DIR` | *(required)* | Absolute path to the folder holding the database and the agents' worktrees. |
+| `QUACK_PROJECT_ROOTS` | none | Folders holding your projects, separated by `:`. Agents can be launched in any folder directly inside one. Set here only: nothing in the dashboard can change it. |
+| `QUACK_MAX_AGENTS` | `4` | How many agents may work at once, from 1 to 16. |
 | `PORT` | `4317` | Port to listen on. Must be 1024–65535. |
 | `HOST` | `127.0.0.1` | Address to bind. **Loopback only** — see below. |
 | `NODE_ENV` | `development` | `development`, `test` or `production`. |
@@ -369,13 +377,15 @@ Everything sits under the `DATA_DIR` you chose:
 ├── quack.db-wal      write-ahead log (see below)
 ├── quack.db-shm      shared memory file for the above
 ├── pairing-code      only while a code is live; deleted the moment it is used
-└── workspace/        where the agent reads and writes files
+├── worktrees/        one git worktree per agent launched in a repository
+└── workspace/        where conversations from before agents existed still run
 ```
 
 - **`quack.db`** holds every conversation and message, and the list of paired devices. It stores **no usable credential**: a session is kept as a SHA-256 hash of its token, so reading this file gives an attacker nothing they can present as a cookie. The directory is created `0700` and the database `0600` — owner-only — because this is a transcript of your work.
 - **`pairing-code`** exists only while a code is valid. It is `0600`, and it is removed the instant the code is used, expires, or is destroyed by wrong guesses. If you see one, a code is live.
 - **`quack.db-wal`** is the write-ahead log. Expect it to be larger than the database sometimes; that is normal and is what makes an abrupt shutdown safe. It is folded back into `quack.db` and removed when the server stops cleanly — that is, on Ctrl+C or a plain `kill`. A `kill -9` skips it, and the log is simply recovered on the next start instead.
-- **`workspace/`** is the agent's working directory. Files it creates land here.
+- **`worktrees/`** holds a worktree for each agent launched in a git repository, named by a random id. The branch inside it is listed at the top of the agent. Nothing here is deleted automatically.
+- **`workspace/`** is where conversations from before agents existed were run, and where they still resume.
 
 **To back up your conversations,** stop the server and copy the whole directory. Copying `quack.db` alone while the server is running can catch it mid-write.
 
@@ -397,13 +407,17 @@ Two reasons. It uses the login you already have, so there is no API key to manag
 
 An obvious design would be to run `claude` in a pseudo-terminal and show the terminal in the browser. That means parsing screen output, and screen output is for humans: it repaints, wraps, and animates. Instead the adapter asks the CLI for structured output (`--output-format stream-json`) and reads that. The result is a real data structure, so *"the agent used the Write tool"* is a fact the UI can render, not a guess about characters on a screen. It also means no pseudo-terminal and no process supervisor.
 
-### Why one message at a time
+### Why agents run in the server, not in the request
 
-Two turns at once would interleave their output and race over which conversation they belong to. Refusing the second is a one-line rule that removes a whole category of confusing bugs. A queue can come later.
+A turn used to live exactly as long as the browser request that started it, so closing the tab stopped the agent. To start work and walk away, the turn has to belong to something that outlives the tab: the server keeps a registry of agents, a message starts a turn and returns at once, and the turn runs whether or not anyone is watching.
 
-### Why streaming over plain HTTP instead of a WebSocket
+### Why one event stream for every agent
 
-A turn is a request with a long answer, which is exactly what a streaming HTTP response is for. A WebSocket would add a connection to manage, reconnect and test for no benefit at this size.
+Every open browser needs to hear about every agent: which are working, and the reply of whichever one is open. One [Server-Sent Events](https://developer.mozilla.org/docs/Web/API/Server-sent_events) stream carries all of it. Each event is numbered, so a browser that loses its connection reconnects and is sent exactly what it missed, and every snapshot it fetches says which event it is up to, so nothing is shown twice or skipped. It is one-way on purpose: anything the browser asks for is an ordinary request, which keeps the CSRF rules the same for everything.
+
+### Why a worktree per agent
+
+Two agents editing one checkout would overwrite each other's changes. A git worktree is a second checkout of the same repository on its own branch, sharing history but not files. Each agent gets one, so they never touch the same files and you merge their branches when you are happy. A folder that is not a repository cannot have worktrees, so there the rule is simply one agent at a time.
 
 ### Why SQLite, and why the write-ahead log
 
@@ -437,7 +451,7 @@ See the next section — it is the single most important thing to understand abo
 
 The dashboard starts the agent with three deliberate restrictions. This is a security boundary, so it is worth reading even if you skip everything else.
 
-**It may read and write files** in its workspace directory, without stopping to ask. There is nobody at the terminal to answer a permission prompt, so a prompt would simply be refused and the agent would be unable to do anything at all. Allowing edits inside its own workspace is the trade.
+**It may read and write files** in its working directory, without stopping to ask: its own worktree for a git project, or the project folder itself otherwise. There is nobody at the terminal to answer a permission prompt, so a prompt would simply be refused and the agent would be unable to do anything at all. Allowing edits in its own working directory is the trade. **For a folder that is not a git repository, that means your real files,** with no branch to review before merging.
 
 **It has no shell.** No `Bash`, no way to run a command. This is the strongest of the three: even if you ask it to run something, it cannot.
 
@@ -477,7 +491,7 @@ lsof -ti tcp:4317 | xargs kill -9
 
 ### The reply says it could not do something because permission was denied
 
-Expected for anything outside editing files in the workspace — most often a shell command. The agent has no shell. See [What the agent is allowed to do](#what-the-agent-is-allowed-to-do).
+Expected for anything outside editing files in the agent's working directory — most often a shell command. The agent has no shell. See [What the agent is allowed to do](#what-the-agent-is-allowed-to-do).
 
 ### `Not logged in · Please run /login` appears in a reply
 
@@ -505,7 +519,7 @@ Five wrong guesses destroy the code deliberately. Wait a few minutes, then resta
 
 Either the session passed 90 days, or the browser went 14 days unused, or something clicked **Log out everywhere**. Pair again.
 
-### The page loads but the sidebar is empty and nothing sends
+### The page loads but the agent list is empty and nothing launches
 
 Check the server is actually up:
 
@@ -554,18 +568,17 @@ No test ever calls the real `claude`. They run against a fake standing in for it
 
 ## What is not built yet
 
-Roughly in the order they matter:
+Roughly in the order they are planned:
 
-1. **Permission prompts in the browser,** so the agent could run commands with your approval instead of not at all.
-2. **A button to pair another device.** The mechanism exists and is authenticated, but nothing in the interface calls it yet, so adding your phone means restarting with `QUACK_PAIR=1`.
-3. **A list of your paired devices,** with the ability to revoke one rather than all of them.
-4. **Renaming and deleting saved conversations.**
-5. **Search across conversations.**
-6. **Remote access** through an authenticated tunnel, so this works from a phone. This is the point of the product, and it is deliberately last.
+1. **Shell commands with your approval,** so an agent can run tests or `git` after asking, answered from an inbox that collects requests from every agent.
+2. **A button to pair another device,** and a list of paired devices with per-device revocation. The mechanism exists; nothing in the interface calls it yet, so adding your phone means restarting with `QUACK_PAIR=1`.
+3. **Remote access** through an authenticated tunnel, so this works from a phone away from your desk.
+4. **Granting specific tools** (MCP servers) to an agent by name.
+5. **Deleting agents and their worktrees,** and search across conversations.
 
-Authentication itself is built. What is **not** yet done from the wider security task: request and response schema validation on every route, structured logging with redaction, and an audit log of security events. None of those is authentication, and all are recorded in `plan.md`.
+Authentication itself is built. What is **not** yet done from the wider security task: request and response schema validation on every route, structured logging with redaction, and an audit log of security events. All are recorded in `plan.md`.
 
-Also absent: attachments, more than one conversation at a time, and support for agents other than Claude Code.
+Also absent: attachments, and support for agents other than Claude Code.
 
 ---
 

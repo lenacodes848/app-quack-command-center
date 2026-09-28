@@ -2,30 +2,42 @@ import { expect, test } from '@playwright/test';
 
 /**
  * The built app is served by `vite preview`, with no dashboard server behind it,
- * so the API is stubbed here. Without a stub the page's own request for the
- * saved conversations answers 404 and the browser logs it as a console error,
- * which this test would report as a failure — correctly, since a real user would
- * see the same thing. Stubbing it instead means the sidebar is exercised against
- * a known response rather than merely tolerated.
+ * so the API is stubbed here. Without a stub the page's own requests for the
+ * agent list and the event stream answer 404 and the browser logs them as
+ * console errors, which this test would report as a failure — correctly, since a
+ * real user would see the same thing. Stubbing them instead means the list is
+ * exercised against a known response rather than merely tolerated.
  */
-const SAVED_SESSIONS = {
-  sessions: [
+const AGENTS = {
+  seq: 2,
+  agents: [
     {
       id: 'aaaaaaaa-0000-0000-0000-000000000001',
-      title: 'Yesterday, the adapter',
+      name: 'Fix the login bug',
+      projectDir: '/srv/projects/app',
+      projectName: 'app',
+      branch: 'quack/fix-the-login-bug-aaaaaa',
       model: 'claude-opus-5-5',
-      createdAt: '2026-09-24T09:00:00.000Z',
-      updatedAt: '2026-09-24T10:00:00.000Z',
+      runState: 'running',
+      createdAt: '2026-09-28T09:00:00.000Z',
+      updatedAt: '2026-09-28T10:00:00.000Z',
     },
     {
       id: 'aaaaaaaa-0000-0000-0000-000000000002',
-      title: 'An older question',
+      name: 'An older question',
+      projectDir: null,
+      projectName: null,
+      branch: null,
       model: null,
+      runState: 'idle',
       createdAt: '2026-09-23T09:00:00.000Z',
       updatedAt: '2026-09-23T09:30:00.000Z',
     },
   ],
 };
+
+/** An event stream that says hello and ends. EventSource reconnects quietly. */
+const HELLO_STREAM = 'retry: 60000\n\nevent: hello\ndata: {"seq":2}\n\n';
 
 /** Watch for anything the browser complains about, including CSP violations. */
 function watchConsole(page: import('@playwright/test').Page): string[] {
@@ -49,7 +61,7 @@ test('an unpaired browser is shown the pairing screen, not the dashboard', async
 
   await expect(page.getByLabel('Pairing code')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Pair this device' })).toBeVisible();
-  await expect(page.getByRole('navigation', { name: 'Saved conversations' })).toHaveCount(0);
+  await expect(page.getByRole('navigation', { name: 'Agents' })).toHaveCount(0);
 
   // The browser logs every non-2xx fetch as a console error, and the 401 here is
   // the correct answer to an unpaired browser asking who it is. Anything else —
@@ -96,8 +108,12 @@ test('the built web app renders the command center shell with a clean console', 
   await page.route('**/api/me', (route) =>
     route.fulfill({ json: { paired: true, device: 'Mac', persistent: true } }),
   );
-  await page.route('**/api/sessions', (route) =>
-    route.fulfill({ json: SAVED_SESSIONS, headers: { 'content-type': 'application/json' } }),
+  await page.route('**/api/agents', (route) => route.fulfill({ json: AGENTS }));
+  await page.route('**/api/events', (route) =>
+    route.fulfill({
+      body: HELLO_STREAM,
+      headers: { 'content-type': 'text/event-stream; charset=utf-8' },
+    }),
   );
 
   const response = await page.goto('/');
@@ -106,11 +122,12 @@ test('the built web app renders the command center shell with a clean console', 
   await expect(page).toHaveTitle('Quack Command Center');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Quack Command Center');
 
-  // The saved conversations reach the screen. This is the part a restart depends
-  // on, so a shell that renders without them is not actually working.
-  const sidebar = page.getByRole('navigation', { name: 'Saved conversations' });
-  await expect(sidebar.getByRole('button')).toHaveCount(2);
-  await expect(sidebar.getByRole('button').first()).toContainText('Yesterday, the adapter');
+  // The agents reach the screen, newest first, each with what it is doing. A
+  // shell that renders without them is not actually working.
+  const list = page.getByRole('navigation', { name: 'Agents' });
+  await expect(list.getByRole('button', { name: /Fix the login bug/ })).toContainText('Working');
+  await expect(list.getByRole('button', { name: /An older question/ })).toContainText('Idle');
+  await expect(list).toContainText('2 agents, 1 working');
 
   expect(problems, 'the page must load without console or page errors').toEqual([]);
 });

@@ -386,3 +386,24 @@ Both mutation-checked, and both mutations confirmed applied before the run: remo
 **#45 — the `plan.md` checkpoint pinned numbers that went stale on the next merge.** Took the issue's first option: the checkpoint now makes only the durable claim (validate exits 0, scans clean) and points here for the figures, and it no longer names the PR `main` is at.
 
 Evidence: `npm run validate` exits 0 with no warnings. 279 unit tests, 10 integration, 84 repository, 3 browser. Branch coverage 85.68 percent. Scans clean over 70 commits.
+
+## 2026-09-28 (Phase 1: parallel background agents)
+
+The owner chose the product phases (parallel agents, then shell with approvals, device management, phone access, tool grants) and approved approach A for the first: the server owns agents and turns are decoupled from HTTP. They asked to skip the section-by-section design review and the separate spec, consistent with the light-process direction of 2026-09-25, so the design was written into `plan.md` and built directly.
+
+**What changed, end to end.**
+
+- **Config:** `QUACK_PROJECT_ROOTS` (absolute folders separated by `:`, never the filesystem root) and `QUACK_MAX_AGENTS` (1 to 16, default 4).
+- **Adapter:** `--model`, refusing any value that could be read as a flag, because the stored model is replayed on every later turn.
+- **Storage, migration 3:** `project_dir`, `branch`, `run_state` with a CHECK constraint; `setRunState`, `renameSession`, `markInterrupted`. Two older migration tests had rebuilt a "version 1" file by cutting a table out of a current database. That approach cannot survive a migration that alters an existing table, so they now build the old file from the real migrations, which are exported for the purpose.
+- **Server:** `workspaces.ts` lists projects and validates a launch path through `realpath` against the roots, so a symlink inside a root cannot lead out; git projects get `git worktree add -b quack/<slug>-<id>` under `$DATA_DIR/worktrees`. `events.ts` is one SSE stream with sequence numbers, replay from `Last-Event-ID`, `resync` for a client that is too far behind or holds an id from before a restart, and a drop for a client that stops reading. `agents.ts` is the registry: one turn per agent, the limit, one agent at a time in a non-git folder, stop, graceful shutdown, and interrupted-at-startup. Every check in `send` happens synchronously before anything is written, so two sends cannot both pass.
+- **Routes:** `/api/turn`, `/api/session` and `/api/sessions*` are replaced by `/api/projects`, `/api/agents[/:id[/messages|/stop]]` and `/api/events`. Logout closes that session's streams; logout-all closes all of them.
+- **Web:** `agentState.ts` is a pure reducer that reconciles snapshots with the stream by sequence number: an event that lands before the snapshot it follows is replayed over it, and one the snapshot already reflects is ignored. The components are an agent list, a launch form and an agent view, laid out as separate screens on a phone. Notifications are opt-in.
+
+**Tests retired with the behaviour they pinned.** `turnSlot.test.ts` (the global slot, and a hangup releasing it) and the hangup half of `turnFailures.test.ts` described a turn that lived and died with its request, which is exactly what this phase removes. What still applies moved to `agentRoutes.test.ts`: body limits, two simultaneous sends admitting one and recording one question, restart and resume, and a failed turn keeping its question.
+
+**Mutation-checked**, each mutation confirmed applied: the same-agent, limit and shared-folder guards and the dropped abort error in the registry; root containment (`+ sep`) and `realpath` in project resolution; the model-name guard and the `--model` push in the adapter.
+
+**Run live against CLI 2.1.283** in a scratch project root, with `haiku`: two agents in one repository ran together in their own worktrees, a written file appeared only in its agent's worktree, the alias came back as the full model id and a resumed second turn remembered the first, Stop and Ctrl+C both left no `claude` process behind and recorded the turn correctly. Details are in `research.md`. One finding worth knowing: a server from the 2026-09-25 live run (`DATA_DIR=/tmp/quack-live`) is still running on this machine. It was left alone.
+
+Evidence: `npm run validate` exits 0 with no warnings. 346 unit tests, 10 integration, 84 repository, 3 browser. Branch coverage 86.44 percent. Scans clean over 75 commits.

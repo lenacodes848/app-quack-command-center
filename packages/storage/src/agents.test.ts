@@ -22,7 +22,7 @@ describe('an agent', () => {
     const store = openStore(scratchPath());
     const agent = store.createSession({
       workspaceDir: '/data/worktrees/a1',
-      projectDir: '/Users/me/Projects/app',
+      projectDir: '/srv/projects/app',
       branch: 'quack/fix-login-a1b2c3',
       model: 'sonnet',
       title: 'Fix login',
@@ -30,7 +30,7 @@ describe('an agent', () => {
 
     expect(store.getSession(agent.id)).toMatchObject({
       workspaceDir: '/data/worktrees/a1',
-      projectDir: '/Users/me/Projects/app',
+      projectDir: '/srv/projects/app',
       branch: 'quack/fix-login-a1b2c3',
       model: 'sonnet',
       title: 'Fix login',

@@ -43,7 +43,7 @@ What follows, so the reasoning is not lost:
 
 The owner uses agents both ways: watching several live, and starting them then checking back later, often from the phone. Agents work in the owner's **real project folders**, each in its **own git worktree**. Order, each phase its own branch and PR:
 
-1. **Parallel background agents** (in progress, branch `feat/parallel-agents`, design below).
+1. **Parallel background agents.** Built on branch `feat/parallel-agents`, design below, verified live against the real CLI.
 2. **Shell with approvals.** Starts with a live spike of `--permission-prompts host` with `--input-format stream-json`, which `research.md` records as unverified. Swaps the per-turn runner for a long-lived one behind the same interface.
 3. **Device management:** pair-another-device button, paired-device list, per-device revocation.
 4. **Phone access:** Cloudflare Tunnel plus Access. Owner gate on the public hostname. #41 is fixed here.
@@ -71,13 +71,13 @@ The owner approved approach A and these defaults on 2026-09-28: the server owns 
 cd ~/Downloads/1-git/app-quack-command-center && nvm use && git pull && npm run validate
 ```
 
-**What the product does today.** Open `http://127.0.0.1:4317`, pair the browser once with a code printed in the terminal, and hold a conversation with Claude Code. Conversations are saved and listed in a sidebar; reopening one resumes the same provider session, so the agent still has its context. Restarting the server loses nothing. The agent may read and write files in `$DATA_DIR/workspace` and has no shell, no access to the owner's connectors, and none of their personal skills.
+**What the product does today** (once `feat/parallel-agents` is merged). Open `http://127.0.0.1:4317`, pair the browser once with a code printed in the terminal, and launch agents in the folders under `QUACK_PROJECT_ROOTS`. Several run at once, each git project in its own worktree on a `quack/` branch, and they keep working with no tab open. The list shows each agent's state live, any agent can be opened mid-answer, stopped or renamed, and the browser can notify when one finishes or fails. Restarting the server loses nothing; a turn it was in the middle of is marked interrupted. Agents may read and write files in their own working directory and have no shell, no access to the owner's connectors, and none of their personal skills.
 
 **To run it:**
 
 ```
 nvm use && npm run build
-DATA_DIR=~/quack-data node apps/server/dist/index.js
+QUACK_PROJECT_ROOTS=~/Projects DATA_DIR=~/quack-data node apps/server/dist/index.js
 ```
 
 First start prints a pairing code; later starts say how many devices are paired and print no code. `README.md` is accurate and was verified by following its own setup steps into a fresh clone.

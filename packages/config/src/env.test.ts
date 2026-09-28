@@ -83,9 +83,9 @@ describe('loadServerEnv', () => {
   describe('QUACK_PROJECT_ROOTS', () => {
     test('splits on the path delimiter, as PATH does', () => {
       expect(
-        loadServerEnv({ ...valid, QUACK_PROJECT_ROOTS: '/Users/me/Projects:/srv/code' })
+        loadServerEnv({ ...valid, QUACK_PROJECT_ROOTS: '/srv/projects:/srv/code' })
           .QUACK_PROJECT_ROOTS,
-      ).toEqual(['/Users/me/Projects', '/srv/code']);
+      ).toEqual(['/srv/projects', '/srv/code']);
     });
 
     test('ignores empty entries, so a trailing delimiter is harmless', () => {
@@ -111,9 +111,12 @@ describe('loadServerEnv', () => {
       expect(loadServerEnv({ ...valid, QUACK_MAX_AGENTS: '16' }).QUACK_MAX_AGENTS).toBe(16);
     });
 
-    test.each(['0', '17', '2.5', 'four'])('refuses %s with a message that names the range', (value) => {
-      const err = catchConfigError({ ...valid, QUACK_MAX_AGENTS: value });
-      expect(err.problems.join('\n')).toMatch(/QUACK_MAX_AGENTS.*1 to 16/);
-    });
+    test.each(['0', '17', '2.5', 'four'])(
+      'refuses %s with a message that names the range',
+      (value) => {
+        const err = catchConfigError({ ...valid, QUACK_MAX_AGENTS: value });
+        expect(err.problems.join('\n')).toMatch(/QUACK_MAX_AGENTS.*1 to 16/);
+      },
+    );
   });
 });

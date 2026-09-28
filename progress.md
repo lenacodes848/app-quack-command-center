@@ -372,3 +372,17 @@ The sharper lesson is about the test table itself: #38 deliberately added near-m
 **A checkpoint now lives at the top of `plan.md`'s "Next steps"**: what works today, the exact commands to confirm and to run it, the three things that would make the product genuinely useful (pair a second device, remote access through the tunnel, shell with approvals) with the reason each is next, a table of every open issue and why it waits, and the working rules that cost real time. None of the open issues appears in that list of three, which is the point — they are hardening, and the product gaps have no issues.
 
 Evidence: `npm run validate` exits 0 with no warnings. 267 unit tests, 10 integration, 84 repository, 3 browser. Branch coverage 85.41 percent. Scans clean over 68 commits.
+
+## 2026-09-27 (two loopback false positives, and a checkpoint that stops going stale)
+
+#42 merged. Its review filed three issues; all three are fixed here. Everything else open stays deferred with its reasoning on the issue: #41, #28, #24, #14, #15, #12.
+
+**#43 — a bracketed host with trailing text read as loopback.** The bracketed branch of `canHoldSecureCookie` matched a prefix, `^\[([^\]]*)\]`, and threw away whatever followed `]` as though it were a port. So `[::1].evil.example`, `[::1]x` and `[::1]@evil.example` were loopback — the bracketed twin of `127.0.0.1.evil.example`, which #38 had deliberately refused. Anchored at both ends with an explicit optional numeric port. `[::1]:` (a colon with no port) is refused too.
+
+**#44 — shapes that are not addresses read as loopback.** `\d{1,3}` accepted any octet up to 999 and the IPv6 pattern accepted any number of colon groups, so `127.999.999.999`, `127.256.0.1`, `[::ffff:127.256.300.400]`, `[0:0:1]` and a ten-group `::…:1` were all loopback. Rather than widen the regexes with a hand-written octet range as the issue suggested, the patterns now decide only *which* addresses are loopback, and `node:net`'s `isIPv4` and `isIPv6` decide *what is an address*. That fixes the IPv6 half the issue called harmless as well as the IPv4 half, with nothing new to keep in sync. The whole 127/8 block is still loopback. Checked first that Node's parser accepts every spelling the acceptance table needs: `0:0:0:0:0:0:0:1`, `::ffff:127.0.0.1`, `::1` after the zone index is stripped.
+
+Both mutation-checked, and both mutations confirmed applied before the run: removing the anchor fails exactly the five #43 cases, and restoring the old `\d{1,3}` gate fails exactly the five #44 cases. `127.1.2.3` and `[::1%25lo0]:4317` joined the acceptance table so the fix cannot over-tighten.
+
+**#45 — the `plan.md` checkpoint pinned numbers that went stale on the next merge.** Took the issue's first option: the checkpoint now makes only the durable claim (validate exits 0, scans clean) and points here for the figures, and it no longer names the PR `main` is at.
+
+Evidence: `npm run validate` exits 0 with no warnings. 279 unit tests, 10 integration, 84 repository, 3 browser. Branch coverage 85.68 percent. Scans clean over 70 commits.

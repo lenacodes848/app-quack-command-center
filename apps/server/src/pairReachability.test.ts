@@ -36,6 +36,9 @@ describe('canHoldSecureCookie', () => {
     ['[0:0:0:0:0:0:0:1]', true],
     ['[::ffff:127.0.0.1]', true],
     ['127.0.0.2:4317', true],
+    ['127.1.2.3', true],
+    // A zone index names an interface, and the bracketed form may carry a port.
+    ['[::1%25lo0]:4317', true],
   ])('accepts loopback: %s', (host, expected) => {
     // Verified in a real browser: a loopback address counts as a trustworthy
     // origin, so a Secure cookie is honoured over plain HTTP there.
@@ -64,6 +67,21 @@ describe('canHoldSecureCookie', () => {
     ['1:4317'],
     ['01'],
     ['0001'],
+    // The bracketed branch took a prefix match, so anything after `]` was
+    // discarded as though it were a port. `[::1].evil.example` is the bracketed
+    // twin of `127.0.0.1.evil.example` above (#43).
+    ['[::1].evil.example'],
+    ['[::1]x'],
+    ['[::1]@evil.example'],
+    ['[127.0.0.1].evil.example'],
+    ['[::1]:'],
+    // Shaped like loopback but not addresses at all: octets above 255, and
+    // IPv6 with the wrong number of groups (#44).
+    ['127.999.999.999'],
+    ['127.256.0.1'],
+    ['[::ffff:127.256.300.400]'],
+    ['[0:0:1]'],
+    ['[::0:0:0:0:0:0:0:0:0:1]'],
   ])('rejects %s over plain HTTP, because the cookie would be discarded', (host) => {
     expect(canHoldSecureCookie({ host, forwardedProto: undefined })).toBe(false);
   });

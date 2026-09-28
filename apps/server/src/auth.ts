@@ -1,4 +1,5 @@
 import { createHash, randomBytes as nodeRandomBytes, timingSafeEqual } from 'node:crypto';
+import { isIPv4, isIPv6 } from 'node:net';
 
 /** Name of the cookie holding the session token. Not readable by scripts. */
 export const SESSION_COOKIE = 'quack_session';
@@ -249,8 +250,10 @@ export function canHoldSecureCookie(request: {
   // literal (which cannot, and whose colons must be left alone), and a name or
   // IPv4 address with an optional port. Telling the second from the third by
   // counting colons is what stops `::1` losing its tail.
+  // The bracketed form is anchored at both ends: a prefix match discarded
+  // whatever followed `]`, so `[::1].evil.example` read as loopback.
   const host = lower.startsWith('[')
-    ? (/^\[([^\]]*)\]/u.exec(lower)?.[1] ?? '')
+    ? (/^\[([^\]]*)\](?::\d+)?$/u.exec(lower)?.[1] ?? '')
     : (lower.match(/:/gu) ?? []).length > 1
       ? lower
       : lower.replace(/:\d+$/u, '');
@@ -259,8 +262,13 @@ export function canHoldSecureCookie(request: {
   const bare = host.replace(/%.*$/u, '');
 
   if (bare === 'localhost') return true;
+  // The patterns below decide which addresses are loopback; they do not decide
+  // what is an address. Left to themselves they took any three digits as an
+  // octet and any number of colon groups, so `127.999.999.999` and `0:0:1` were
+  // loopback. Node's own parser is the judge of that.
   // The whole 127/8 block is loopback, not only 127.0.0.1.
-  if (/^127(?:\.\d{1,3}){3}$/u.test(bare)) return true;
+  if (isIPv4(bare)) return bare.startsWith('127.');
+  if (!isIPv6(bare)) return false;
   // IPv6 loopback, including the uncompressed spelling of ::1. At least one
   // colon group is required: with `*` the pattern collapsed to `0*1` and matched
   // a host with no colons at all, so `1`, `01` and `0001` were read as loopback.

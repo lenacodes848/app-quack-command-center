@@ -159,7 +159,8 @@ export async function prepareWorkspace(input: PrepareWorkspaceInput): Promise<Pr
       },
     );
   } catch (failure) {
-    const stderr = String((failure as { stderr?: unknown }).stderr ?? '');
+    const raw = (failure as { stderr?: unknown }).stderr;
+    const stderr = typeof raw === 'string' ? raw : '';
     if (/invalid reference: HEAD/u.test(stderr)) {
       throw new WorkspaceError(
         'That repository has no commits yet, so there is nothing to branch from. Make a first commit, then launch again.',

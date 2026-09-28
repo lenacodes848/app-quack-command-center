@@ -14,14 +14,23 @@ export function describeStartup(env: ServerEnv): string {
 }
 
 /**
- * Where agent sessions run.
+ * Where conversations from before agents ran.
  *
- * A directory under DATA_DIR, never the dashboard's own source tree and never
- * a path a request can choose. Letting the browser name the working directory
- * would hand any caller the whole filesystem.
+ * Every conversation started before projects existed is stored with this as its
+ * working directory, and still resumes there, so it has to keep existing.
  */
 export function workspaceDir(env: ServerEnv): string {
   return join(env.DATA_DIR, 'workspace');
+}
+
+/**
+ * Where agents' git worktrees are created.
+ *
+ * Under DATA_DIR rather than inside each project, so launching an agent never
+ * adds a folder to the owner's repository.
+ */
+export function worktreesDir(env: ServerEnv): string {
+  return join(env.DATA_DIR, 'worktrees');
 }
 
 /**
@@ -76,7 +85,11 @@ export const SHUTDOWN_GRACE_MS = 5_000;
  * connections to drain is bounded. On the forced path the store is still closed
  * first, because checkpointing the log matters more than the socket.
  */
-function installShutdown(server: ReturnType<typeof createServer>, closeStore: () => void): void {
+function installShutdown(
+  server: ReturnType<typeof createServer>,
+  stopAgents: () => Promise<void>,
+  closeStore: () => void,
+): void {
   let stopping = false;
 
   const stop = (signal: NodeJS.Signals): void => {
@@ -91,11 +104,17 @@ function installShutdown(server: ReturnType<typeof createServer>, closeStore: ()
     // Do not let the timer itself hold the process open once everything is shut.
     forced.unref();
 
+    // Agents first: each running turn is stopped and its partial answer stored
+    // as interrupted, and the event streams end, which is what lets the server
+    // close without waiting out the grace period.
+    //
     // No closeStore() here: the server's own 'close' event already triggers it,
     // and calling it in both places is redundancy no test can tell apart.
-    server.close(() => {
-      clearTimeout(forced);
-      process.exit(0);
+    void stopAgents().finally(() => {
+      server.close(() => {
+        clearTimeout(forced);
+        process.exit(0);
+      });
     });
   };
 
@@ -123,15 +142,16 @@ export function start(env: ServerEnv): ReturnType<typeof createServer> {
     },
   });
 
-  const server = createServer(
-    createApp({
-      workspaceDir: workspace,
-      webDir: builtWebDir(),
-      runTurn: undefined,
-      store,
-      pairing,
-    }),
-  );
+  const app = createApp({
+    projectRoots: env.QUACK_PROJECT_ROOTS,
+    worktreesDir: worktreesDir(env),
+    maxAgents: env.QUACK_MAX_AGENTS,
+    webDir: builtWebDir(),
+    runTurn: undefined,
+    store,
+    pairing,
+  });
+  const server = createServer(app);
 
   // Closing the store checkpoints the write-ahead log, so a clean stop leaves
   // one tidy database file rather than a -wal beside it. Closing twice throws,
@@ -144,7 +164,7 @@ export function start(env: ServerEnv): ReturnType<typeof createServer> {
   };
   server.once('close', closeStore);
 
-  installShutdown(server, closeStore);
+  installShutdown(server, app.shutdown, closeStore);
 
   // Without this, a port clash surfaces as an unhandled 'error' event and a
   // raw Node stack trace, which says nothing useful to someone who simply has
@@ -163,7 +183,11 @@ export function start(env: ServerEnv): ReturnType<typeof createServer> {
 
   server.listen(env.PORT, env.HOST, () => {
     console.log(`${PRODUCT_NAME} on http://${env.HOST}:${String(env.PORT)}`);
-    console.log(`Agent workspace: ${workspace}`);
+    console.log(
+      env.QUACK_PROJECT_ROOTS.length === 0
+        ? 'No project folders configured. Set QUACK_PROJECT_ROOTS to launch agents in your projects.'
+        : `Project folders: ${env.QUACK_PROJECT_ROOTS.join(', ')}`,
+    );
     console.log(`Conversations: ${databasePath(env)}`);
 
     const active = store.countActiveAppSessions(new Date().toISOString());

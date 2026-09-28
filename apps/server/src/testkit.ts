@@ -27,7 +27,14 @@ export interface PairedServer {
   close: () => void;
 }
 
-export interface StartPairedOptions extends Omit<AppOptions, 'store'> {
+export interface StartPairedOptions extends Omit<
+  AppOptions,
+  'store' | 'projectRoots' | 'worktreesDir'
+> {
+  /** Defaults to none, which is all a test that launches no agent needs. */
+  projectRoots?: readonly string[] | undefined;
+  /** Defaults to a folder under `dataDir`. */
+  worktreesDir?: string | undefined;
   /** Where to keep the database. A directory, not a file. */
   dataDir: string;
   /** Reuse an existing store, for instance to simulate a restart. */
@@ -53,7 +60,15 @@ export async function startPaired(options: StartPairedOptions): Promise<PairedSe
     openStore(`${options.dataDir}/quack.db`, { now: () => new Date(now()).toISOString() });
   const pairing = options.pairing ?? createPairingMode({ now });
 
-  const server: Server = createServer(createApp({ ...options, store, pairing, now }));
+  const app = createApp({
+    ...options,
+    projectRoots: options.projectRoots ?? [],
+    worktreesDir: options.worktreesDir ?? `${options.dataDir}/worktrees`,
+    store,
+    pairing,
+    now,
+  });
+  const server: Server = createServer(app);
   await new Promise<void>((resolve) => {
     server.listen(0, '127.0.0.1', resolve);
   });

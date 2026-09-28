@@ -167,8 +167,8 @@ describe('a turn', () => {
     const shape = seen.map(({ type, data }) => {
       const d = data as Record<string, unknown>;
       if (type === 'agent') return `agent:${String(d['runState'])}`;
-      if (type === 'message') return `message:${String((d['message'] as { role: string }).role)}`;
-      return `turn:${String((d['event'] as { type: string }).type)}`;
+      if (type === 'message') return `message:${(d['message'] as { role: string }).role}`;
+      return `turn:${(d['event'] as { type: string }).type}`;
     });
     expect(shape).toEqual([
       'message:user',
@@ -226,8 +226,10 @@ describe('a turn', () => {
   test('a runner that throws is recorded as a failure, and frees the agent', async () => {
     const { store } = setup();
     const { hub } = recordingHub();
-    // eslint-disable-next-line require-yield -- a runner that fails before its first event
+    // A runner that fails before its first event.
+    // eslint-disable-next-line require-yield -- it never gets as far as yielding
     const throwing = async function* run(): AsyncGenerator<ClaudeEvent> {
+      await Promise.resolve();
       throw new Error('spawn exploded');
     };
     const registry = createAgentRegistry({ store, hub, runTurn: throwing, maxRunning: 4 });
@@ -259,7 +261,7 @@ describe('several agents', () => {
     expect(store.listMessages(b.id).at(-1)?.content).toBe('B');
   });
 
-  test('one agent takes one turn at a time', async () => {
+  test('one agent takes one turn at a time', () => {
     const { store, registry } = setup();
     const a = store.createSession({ workspaceDir: '/w/a', branch: 'a' });
 
@@ -273,7 +275,7 @@ describe('several agents', () => {
     expect(store.listMessages(a.id).map((m) => m.content)).toEqual(['first']);
   });
 
-  test('no more than the limit run at once, and the refusal names the limit', async () => {
+  test('no more than the limit run at once, and the refusal names the limit', () => {
     const { store, registry } = setup(2);
     const ids = ['a', 'b', 'c'].map(
       (name) => store.createSession({ workspaceDir: `/w/${name}`, branch: name }).id,
@@ -289,7 +291,7 @@ describe('several agents', () => {
     });
   });
 
-  test('two agents cannot work in one folder that has no worktrees', async () => {
+  test('two agents cannot work in one folder that has no worktrees', () => {
     // A folder that is not a git repository runs agents in place, so a second
     // agent there would edit the same files as the first.
     const { store, registry } = setup();

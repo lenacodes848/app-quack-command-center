@@ -386,3 +386,21 @@ Both mutation-checked, and both mutations confirmed applied before the run: remo
 **#45 — the `plan.md` checkpoint pinned numbers that went stale on the next merge.** Took the issue's first option: the checkpoint now makes only the durable claim (validate exits 0, scans clean) and points here for the figures, and it no longer names the PR `main` is at.
 
 Evidence: `npm run validate` exits 0 with no warnings. 279 unit tests, 10 integration, 84 repository, 3 browser. Branch coverage 85.68 percent. Scans clean over 70 commits.
+
+## 2026-09-28 (loopback compared as an address, not as text; the forwarded-proto analysis written down)
+
+#46 merged. Its review filed two issues about the same few lines, and a re-check of #41 found a documentation step it asked for had never happened. All three are handled here. Everything else open is labelled `deferred`: #41's code change, #28, #24, #15, #14, #12.
+
+**#47 — the IPv4-mapped loopback spelling a browser sends was refused.** The pattern knew only the dotted form, `::ffff:127.0.0.1`, but the WHATWG URL serializer emits hex, so a browser sends `[::ffff:7f00:1]`. The table pinned the spelling no browser produces and refused the one it does. This was the first **false refusal** in this function; every earlier fix (#39, #43, #44) was a false accept, which is why refusal tables never surfaced it.
+
+The fix removes both IPv6 text patterns. A string must parse as an address (`isIPv4` or `isIPv6`, as in #46) and is then checked against a `node:net` `BlockList` holding `127.0.0.0/8` and `::1`. `BlockList` compares parsed addresses, so every spelling of the same address gets the same answer. I started with a third rule, `::ffff:7f00:0/104`, and removed it when mutation showed deleting either it or the `127/8` rule failed nothing: a `BlockList` IPv4 rule already matches the IPv4-mapped IPv6 forms, which Node documents. Keeping both would have rebuilt #48.
+
+One behaviour change, deliberate: the deprecated IPv4-compatible form, `::127.0.0.1` / `::7f00:1`, was accepted in its dotted spelling and is now refused in both. RFC 4291 deprecated that form, and it is not loopback. The refusal fails closed, with the 421 message pointing at the printed address.
+
+**#48 — the #39 fix had become dead code with a comment describing it as live.** It is gone along with the pattern it lived in. The four #39 cases (`1`, `1:4317`, `01`, `0001`) stay in the refusal table, with the comment now saying what actually refuses them: they do not parse as addresses.
+
+Mutation-checked with each mutation's line count confirmed: removing `::1` fails 5 cases, removing `127/8` fails 12, and removing the IPv6 branch fails 9.
+
+**#41, the documentation half.** The issue asked for the deferral to be recorded in `research.md`, and it was not, although `plan.md` sends anyone touching the reachability check to read `research.md` first. The new section, under the device pairing design, states what the header decides today, why it is safe only because of the loopback bind, and the three options for TASK_023. The option that looks standard, trusting the proxy's peer address, is a trap here: `cloudflared` connects from this same machine, so the tunnel and a local process share `127.0.0.1`. The code change is still deferred.
+
+Evidence: `npm run validate` exits 0 with no warnings. 286 unit tests, 10 integration, 84 repository, 3 browser. Branch coverage 85.62 percent. Scans clean over 71 commits.

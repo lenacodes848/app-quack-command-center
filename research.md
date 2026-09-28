@@ -148,6 +148,20 @@ There are no usernames, so account enumeration is moot; a failed pairing returns
 
 Zod request and response schemas on every route, Pino with redaction of authorization, cookies and message content, request IDs, per-action rate limits beyond pairing, and the `audit_events` table. These are all part of TASK_013 as specified and none of them is authentication; the owner scoped this increment to the auth core on 2026-09-25.
 
+### `x-forwarded-proto` is trusted from anyone (#41, deferred to TASK_023)
+
+**Current behaviour, re-verified 2026-09-28.** `app.ts` reads `x-forwarded-proto` from every request and believes it. It decides two things: `canHoldSecureCookie` returns `true` for any host once the header says `https`, skipping the 421 that stops pairing on an address that would discard the cookie; and `securityHeaders()` sends HSTS when it says `https`. No check establishes that a proxy set the header.
+
+**Safe today only because of the bind.** `HOST` must be loopback (`packages/config/src/env.ts`), so the only clients are processes on this computer, and a browser cannot set this header on a navigation. Neither decision is an authorisation boundary: pairing still needs the single-use code and the origin check. The moment anything forwards outside traffic to the port, the header becomes attacker-controlled input.
+
+**The three options, for TASK_023 to choose between. None of them has been tried.**
+
+1. **Trust it by the peer address of the proxy.** The usual answer, and a trap here. `cloudflared` runs on this same computer and connects to loopback, so the tunnel's socket address is `127.0.0.1`, which is also what a local browser or any local process has. The peer address cannot tell them apart, so this option would read as a check while granting what it appears to prevent.
+2. **Trust it by a shared secret or a signed assertion from the proxy.** Cloudflare Access sends a signed `Cf-Access-Jwt-Assertion` header on requests it has authenticated. Verifying that token proves the request came through Access, which is stronger than proving it came through the tunnel. Unverified here: exactly which headers reach the origin, and how the signing keys are fetched and cached.
+3. **Ignore the header and use the socket.** Only correct if the server itself terminates TLS, which it does not, and the tunnel design does not need it to. Under a tunnel, every request would read as plain HTTP, so HSTS would never be sent and the 421 would refuse the tunnel's public hostname.
+
+Whichever is chosen, it should also decide HSTS, since both read the same header. Measure it against a real tunnel before relying on it.
+
 ### How each PRD 5.2 requirement is met
 
 | Requirement | How |

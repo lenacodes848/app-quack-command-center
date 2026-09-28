@@ -1,5 +1,5 @@
 import { createHash, randomBytes as nodeRandomBytes, timingSafeEqual } from 'node:crypto';
-import { isIPv4, isIPv6 } from 'node:net';
+import { BlockList, isIPv4, isIPv6 } from 'node:net';
 
 /** Name of the cookie holding the session token. Not readable by scripts. */
 export const SESSION_COOKIE = 'quack_session';
@@ -262,21 +262,22 @@ export function canHoldSecureCookie(request: {
   const bare = host.replace(/%.*$/u, '');
 
   if (bare === 'localhost') return true;
-  // The patterns below decide which addresses are loopback; they do not decide
-  // what is an address. Left to themselves they took any three digits as an
-  // octet and any number of colon groups, so `127.999.999.999` and `0:0:1` were
-  // loopback. Node's own parser is the judge of that.
-  // The whole 127/8 block is loopback, not only 127.0.0.1.
-  if (isIPv4(bare)) return bare.startsWith('127.');
-  if (!isIPv6(bare)) return false;
-  // IPv6 loopback, including the uncompressed spelling of ::1. At least one
-  // colon group is required: with `*` the pattern collapsed to `0*1` and matched
-  // a host with no colons at all, so `1`, `01` and `0001` were read as loopback.
-  // A browser reads `http://1/` as 0.0.0.1, which is not.
-  if (/^(?:0*:)+0*1$/u.test(bare)) return true;
-  // IPv4-mapped loopback, e.g. ::ffff:127.0.0.1.
-  return /^(?:0*:)*(?:ffff:)?127(?:\.\d{1,3}){3}$/u.test(bare);
+  // Anything else must parse as an address, and is then compared as one rather
+  // than matched as text. Text patterns kept being wrong in both directions:
+  // they took `127.999.999.999` and `0:0:1` as loopback (#44), and refused
+  // `::ffff:7f00:1`, the hex spelling a browser sends for ::ffff:127.0.0.1 (#47).
+  if (isIPv4(bare)) return LOOPBACK.check(bare, 'ipv4');
+  if (isIPv6(bare)) return LOOPBACK.check(bare, 'ipv6');
+  return false;
 }
+
+// The whole 127/8 block, and ::1. A BlockList IPv4 rule also matches the
+// address mapped into IPv6 (`::ffff:127.0.0.1`, `::ffff:7f00:1`), so that needs
+// no rule of its own. The deprecated IPv4-compatible form (`::127.0.0.1`) is not
+// matched, and RFC 4291 does not make it loopback.
+const LOOPBACK = new BlockList();
+LOOPBACK.addSubnet('127.0.0.0', 8, 'ipv4');
+LOOPBACK.addAddress('::1', 'ipv6');
 
 export interface OriginCheck {
   origin?: string | undefined;

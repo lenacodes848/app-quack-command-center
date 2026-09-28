@@ -39,6 +39,11 @@ describe('canHoldSecureCookie', () => {
     ['127.1.2.3', true],
     // A zone index names an interface, and the bracketed form may carry a port.
     ['[::1%25lo0]:4317', true],
+    // The spelling a browser actually sends for IPv4-mapped loopback: the URL
+    // serializer emits hex, so `[::ffff:127.0.0.1]` arrives as this (#47).
+    ['[::ffff:7f00:1]', true],
+    ['[::ffff:7f00:1]:4317', true],
+    ['[0:0:0:0:0:ffff:127.0.0.1]', true],
   ])('accepts loopback: %s', (host, expected) => {
     // Verified in a real browser: a loopback address counts as a trustworthy
     // origin, so a Secure cookie is honoured over plain HTTP there.
@@ -60,9 +65,9 @@ describe('canHoldSecureCookie', () => {
     ['1270.0.0.1'],
     ['127.0.0.1.evil.example'],
     ['[::2]:4317'],
-    // `(?:0*:)*` allowed ZERO colon groups, so the IPv6 loopback pattern
-    // collapsed to `0*1` and matched a host with no colons at all. A browser
-    // reads `http://1/` as 0.0.0.1, which is not loopback.
+    // A browser reads `http://1/` as 0.0.0.1, which is not loopback. These once
+    // matched an IPv6 pattern that collapsed to `0*1` (#39); the parser now
+    // refuses them before any comparison.
     ['1'],
     ['1:4317'],
     ['01'],
@@ -82,6 +87,12 @@ describe('canHoldSecureCookie', () => {
     ['[::ffff:127.256.300.400]'],
     ['[0:0:1]'],
     ['[::0:0:0:0:0:0:0:0:0:1]'],
+    // IPv4-mapped, but not 127/8: 192.168.1.20 and 128.0.0.1.
+    ['[::ffff:c0a8:114]'],
+    ['[::ffff:128.0.0.1]'],
+    // The deprecated IPv4-compatible form is not loopback, in either spelling.
+    ['[::127.0.0.1]'],
+    ['[::7f00:1]'],
   ])('rejects %s over plain HTTP, because the cookie would be discarded', (host) => {
     expect(canHoldSecureCookie({ host, forwardedProto: undefined })).toBe(false);
   });
